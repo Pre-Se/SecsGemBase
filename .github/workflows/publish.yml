@@ -12,6 +12,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,5 +36,5 @@ jobs:
         run: dotnet nuget push 'nupkgs/*.nupkg' --api-key ${{ secrets.GITHUB_TOKEN }} --source https://nuget.pkg.github.com/Pre-Se/
 
       - name: Push to nuget.org
-        if: secrets.NUGET_API_KEY != ''
-        run: dotnet nuget push 'nupkgs/*.nupkg' --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        if: env.NUGET_API_KEY != ''
+        run: dotnet nuget push 'nupkgs/*.nupkg' --api-key ${{ env.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
