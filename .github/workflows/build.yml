@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master, development]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore SecsGemBase.sln
+
+      - name: Build
+        run: dotnet build SecsGemBase.sln -c Release --no-restore
+
+      - name: Pack (verify packages build)
+        run: dotnet pack SecsGemBase.sln -c Release --no-build -o nupkgs
+
+      - name: Upload packages as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkgs
+          path: nupkgs/*.nupkg
+          if-no-files-found: error
