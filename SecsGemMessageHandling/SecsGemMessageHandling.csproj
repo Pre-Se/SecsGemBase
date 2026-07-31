@@ -1,8 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <Title>SECS/GEM Message Handler</Title>
     <Description>Small library class to send and receive SECS/GEM messages</Description>
   </PropertyGroup>

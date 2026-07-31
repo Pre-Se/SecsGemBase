@@ -1,20 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <Title>TCPIPBase Library</Title>
     <Description>Small and simple TCP/IP library</Description>
   </PropertyGroup>
-
-  <ItemGroup>
-    <Compile Remove="Network\Interfaces\**" />
-    <Compile Remove="Network\TCPBase\**" />
-    <EmbeddedResource Remove="Network\Interfaces\**" />
-    <EmbeddedResource Remove="Network\TCPBase\**" />
-    <None Remove="Network\Interfaces\**" />
-    <None Remove="Network\TCPBase\**" />
-  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />

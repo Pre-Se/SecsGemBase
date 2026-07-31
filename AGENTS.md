@@ -22,10 +22,6 @@ SecsGemMessageHandling   ← top: depends on everything
   └── Logging             ← depends on SecsGemBaseItems
 ```
 
-## Target Framework
-
-Every `.csproj` sets `<TargetFramework>net10.0</TargetFramework>` individually, overriding `Directory.Build.props` which says `net9.0`. If you change the target framework, update each `.csproj` — `Directory.Build.props` is not the source of truth.
-
 ## Language / Nullability
 
 - `LangVersion` = `preview` (in `Directory.Build.props`)

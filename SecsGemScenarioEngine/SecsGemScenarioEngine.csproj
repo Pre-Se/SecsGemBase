@@ -1,8 +1,6 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <Title>SECS/GEM Scenario Engine</Title>
     <Description>Graph-based scenario execution engine for SECS/GEM message sequences</Description>
   </PropertyGroup>

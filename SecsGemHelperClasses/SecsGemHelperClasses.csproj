@@ -1,8 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <Title>SECS/GEM Helper Classes</Title>
     <Description>Helper dependency for parsing messages</Description>
   </PropertyGroup>
