@@ -8,24 +8,34 @@ SecsGemBase is a C# library suite implementing the SECS/GEM protocol for semicon
 dotnet restore SecsGemBase.sln
 dotnet build SecsGemBase.sln
 dotnet build SecsGemBase.sln --configuration Release
+dotnet pack SecsGemBase.sln -c Release
 ```
 
 There are no tests, no linter, and no typecheck in this repo. A successful `dotnet build` is the only verification step.
 
+## Shared Build Settings (Directory.Build.props)
+
+`Directory.Build.props` centralizes all the `.csproj` files metadata:
+
+- `TargetFramework` = `net10.0`
+- `LangVersion` = `preview`
+- `ImplicitUsings` = `enable`
+- `Nullable` = `enable`
+- Symbol packages (`IncludeSymbols`, `SymbolPackageFormat=snupkg`), SourceLink (`EmbedUntrackedSources`), reproducible builds
+- Versioning via **Nerdbank.GitVersioning**: base version in `version.json`; untagged builds get a prerelease suffix with the git commit hash.
+
+Individual `.csproj` files contain only per-project `Title`, `Description`, and references.
+
 ## Project Dependencies (layered — lower layers must not depend upward)
 
 ```
-SecsGemMessageHandling   ← top: depends on everything
-  ├── SecsGemBaseItems    ← depends on SecsGemHelperClasses
-  ├── TCPIPBaseLibrary    ← depends on Logging, SecsGemHelperClasses
-  ├── SecsGemHelperClasses ← no project deps (leaf)
-  └── Logging             ← depends on SecsGemBaseItems
+SecsGemScenarioEngine        ← top: depends on SecsGemMessageHandling
+  └── SecsGemMessageHandling ← depends on SecsGemBaseItems, TCPIPBaseLibrary, SecsGemHelperClasses, Logging
+        ├── SecsGemBaseItems    ← depends on SecsGemHelperClasses
+        ├── TCPIPBaseLibrary    ← depends on Logging, SecsGemHelperClasses
+        ├── Logging             ← depends on SecsGemBaseItems
+        └── SecsGemHelperClasses ← no project deps (leaf)
 ```
-
-## Language / Nullability
-
-- `LangVersion` = `preview` (in `Directory.Build.props`)
-- `ImplicitUsings` and `Nullable` are enabled in every `.csproj`
 
 ## Key NuGet Dependencies
 
@@ -34,11 +44,11 @@ SecsGemMessageHandling   ← top: depends on everything
 - `CommunityToolkit.Mvvm` (observable properties for connection state)
 - `Microsoft.Extensions.Logging.Abstractions`
 
-## CI Artifacts
+Build-time only (never appear in the produced packages): `Nerdbank.GitVersioning`, `DotNet.ReproducibleBuilds`, `Microsoft.SourceLink.GitHub`.
 
-- Azure Pipelines (`azure-pipelines.yml`) and GitLab CI (`gitlab-ci.yml`) both trigger on `master` and `development`
-- Both build Release, pack NuGet, and publish to internal feeds
-- `Logging.csproj` has `GeneratePackageOnBuild=True` (others do not)
+## CI
+
+No CI pipeline is configured in this repo. Packages are published manually: `dotnet pack SecsGemBase.sln -c Release` then push the `.nupkg`/`.snupkg` files to nuget.org.
 
 ## Domain Vocabulary (Naming)
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Solution Overview
 
-SecsGemBase is a C# (.NET 10) library suite implementing the **SECS/GEM** (SEMI Equipment Communications Standard / Generic Equipment Model) protocol for semiconductor manufacturing equipment. It is published as a set of NuGet packages to an internal Azure DevOps feed (`Products/SECS_GEM`). There is no runnable application — all projects are libraries.
+SecsGemBase is a C# (.NET 10) library suite implementing the **SECS/GEM** (SEMI Equipment Communications Standard / Generic Equipment Model) protocol for semiconductor manufacturing equipment. It is published as a set of NuGet packages (AGPL-3.0 licensed). There is no runnable application — all projects are libraries.
 
 ## Build Commands
 
@@ -17,17 +17,33 @@ dotnet build SecsGemBase.sln
 
 # Build (release / for packaging)
 dotnet build SecsGemBase.sln --configuration Release
+
+# Pack NuGet packages
+dotnet pack SecsGemBase.sln -c Release
 ```
 
-There are no test projects in this solution. CI runs on Azure Pipelines (`azure-pipelines.yml`) and triggers on `master` and `development` branches.
+There are no test projects in this solution. A successful `dotnet build` is the only verification step.
+
+## Shared Build Settings
+
+`Directory.Build.props` centralizes all the `.csproj` files metadata:
+
+- `TargetFramework` = `net10.0`
+- `LangVersion` = `preview`
+- `ImplicitUsings` = `enable`
+- `Nullable` = `enable`
+- Symbol packages (`IncludeSymbols`, `snupkg`), SourceLink, reproducible builds
+- Versioning via **Nerdbank.GitVersioning**: base version in `version.json`, untagged builds get a prerelease suffix
+
+Individual `.csproj` files only contain per-project `Title`, `Description`, and references. Do not duplicate shared settings in individual `.csproj` files.
 
 ## Architecture
 
 The solution is layered. Higher layers depend on lower ones; lower layers must not depend upward.
 
 ```
-SecsGemMessageHandling   ← top-level orchestration: connects all pieces
-        │
+SecsGemScenarioEngine        ← top: scenario execution, depends on SecsGemMessageHandling
+  └── SecsGemMessageHandling ← full communication stack: depends on everything below
         ├── SecsGemBaseItems    ← core data structures, enums, XML parser
         ├── TCPIPBaseLibrary    ← TCP/IP client/server (Active/Passive modes)
         ├── SecsGemHelperClasses ← shared utilities: EventBus, ID generation
@@ -45,11 +61,12 @@ SecsGemMessageHandling   ← top-level orchestration: connects all pieces
 
 | Project | Responsibility |
 |---|---|
-| `SecsGemBaseItems` | Data containers (`SecsGemMessage`, `SecsGemTransaction`, `SecsGemItem`), enums (`ControlState`, `MessageFormat`), `XMLParser` for loading equipment message libraries from XML, and `ISecsGemParameters` configuration. |
-| `TCPIPBaseLibrary` | Raw TCP socket layer. `NetworkConnectionFactory` creates either an Active (equipment initiates) or Passive (host initiates) connection. Implements `INetworkConnection` with send/receive and connection lifecycle. |
+| `SecsGemBaseItems` | Data containers (`SecsGemDataMessage`, `SecsGemTransaction`, `SecsGemItem`), enums (`ControlState`, `SecsGemItemFormatType`), `XMLParser` for loading equipment message libraries from XML, and HSMS parameters configuration (`IHSMSParameters`). |
+| `TCPIPBaseLibrary` | Raw TCP socket layer. `NetworkConnectionFactory` creates either an Active (equipment initiates) or Passive (host initiates) connection. Implements `ITCPIPBase` with send/receive and connection lifecycle. |
 | `SecsGemMessageHandling` | Assembles the full SECS/GEM communication stack. `CommunicationHandler` is the central class: it owns the network connection, drives the HSMS state machine, and dispatches parsed messages to callers via observables and events. |
-| `SecsGemHelperClasses` | Stateless utilities shared across layers: message ID generation, SECS-II item builders, filtered/transient `IEventBus` implementations. |
-| `Logging` | `ISecsGemLogger` abstraction plus `IMessageLogger` for structured message-level logging. `MessageStatus` / `MessageResult` define log outcomes. |
+| `SecsGemHelperClasses` | Stateless utilities shared across layers: message ID generation, message parsing helpers, filtered/transient `IEventBus` implementations. |
+| `Logging` | `ISecsMessageLogger` abstraction plus structured message-level logging. `MessageStatus` / `MessageResult` define log outcomes. |
+| `SecsGemScenarioEngine` | Graph-based scenario execution engine for SECS/GEM message sequences (nodes, edges, execution service). |
 
 ### XML Library Loading
 
@@ -61,7 +78,7 @@ Equipment capabilities are described in XML files (`.xml`) loaded by `XMLParser`
 
 ### NuGet Packaging
 
-Each project has a `.nuspec` file. Global package metadata (version `1.3.0`, symbol packages) is centralized in `Directory.Build.props`. Packages are pushed to the internal feed by the Azure Pipeline.
+All package metadata is centralized in `Directory.Build.props` (license, source link, symbols). Versioning is automatic via **Nerdbank.GitVersioning** (see Shared Build Settings). Packages are created with `dotnet pack SecsGemBase.sln -c Release`.
 
 ### Domain Vocabulary
 
