@@ -7,7 +7,6 @@
     <Description>Defines interfaces for logging of SECS/GEM messages</Description>
 	<IncludeSymbols>true</IncludeSymbols>
 	<SymbolPackageFormat>snupkg</SymbolPackageFormat>
-	<TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
   <ItemGroup>

@@ -5,9 +5,6 @@
     <Nullable>enable</Nullable>
     <Title>SECS/GEM Base Items</Title>
     <Description>defines base SECS/GEM standard items and messages</Description>
-	<IncludeSymbols>true</IncludeSymbols>
-	<SymbolPackageFormat>snupkg</SymbolPackageFormat>
-	<TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
