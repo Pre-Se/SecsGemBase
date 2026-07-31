@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<IncludeSymbols>true</IncludeSymbols>
+	<SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Title>TCPIPBase Library</Title>
+    <Description>Small and simple TCP/IP library</Description>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Network\Interfaces\**" />
+    <Compile Remove="Network\TCPBase\**" />
+    <EmbeddedResource Remove="Network\Interfaces\**" />
+    <EmbeddedResource Remove="Network\TCPBase\**" />
+    <None Remove="Network\Interfaces\**" />
+    <None Remove="Network\TCPBase\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Logging\Logging.csproj" />
+    <ProjectReference Include="..\SecsGemHelperClasses\SecsGemHelperClasses.csproj" />
+  </ItemGroup>
+
+</Project>

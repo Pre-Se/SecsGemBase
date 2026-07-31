@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Title>SECS/GEM Scenario Engine</Title>
+    <Description>Graph-based scenario execution engine for SECS/GEM message sequences</Description>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SecsGemMessageHandling\SecsGemMessageHandling.csproj" />
+  </ItemGroup>
+
+</Project>

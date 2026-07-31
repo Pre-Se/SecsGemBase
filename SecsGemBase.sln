@@ -1,0 +1,59 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.13.35913.81
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TCPIPBaseLibrary", "TCPIPBaseLibrary\TCPIPBaseLibrary.csproj", "{7A585E80-BB3C-2BD9-77E3-C260A15F64C2}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecsGemMessageHandling", "SecsGemMessageHandling\SecsGemMessageHandling.csproj", "{3D86F5A9-EE8D-D833-FFEC-31F5B4C546D0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecsGemHelperClasses", "SecsGemHelperClasses\SecsGemHelperClasses.csproj", "{5B455B52-CC39-FD71-49FE-141915ECB3E5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecsGemBaseItems", "SecsGemBaseItems\SecsGemBaseItems.csproj", "{22E93793-C9D8-DB48-9D49-5334F41C0C61}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Logging", "Logging\Logging.csproj", "{7F53268B-64F9-039B-D8EC-45C529A3A1F9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecsGemScenarioEngine", "SecsGemScenarioEngine\SecsGemScenarioEngine.csproj", "{E8C4F9A2-1B3D-4E5F-8A9C-D6E7F8A9B0C1}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{8EC462FD-D22E-90A8-E5CE-7E832BA40C5D}"
+	ProjectSection(SolutionItems) = preProject
+		Directory.Build.props = Directory.Build.props
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{7A585E80-BB3C-2BD9-77E3-C260A15F64C2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A585E80-BB3C-2BD9-77E3-C260A15F64C2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A585E80-BB3C-2BD9-77E3-C260A15F64C2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A585E80-BB3C-2BD9-77E3-C260A15F64C2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3D86F5A9-EE8D-D833-FFEC-31F5B4C546D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3D86F5A9-EE8D-D833-FFEC-31F5B4C546D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3D86F5A9-EE8D-D833-FFEC-31F5B4C546D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3D86F5A9-EE8D-D833-FFEC-31F5B4C546D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B455B52-CC39-FD71-49FE-141915ECB3E5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B455B52-CC39-FD71-49FE-141915ECB3E5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B455B52-CC39-FD71-49FE-141915ECB3E5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B455B52-CC39-FD71-49FE-141915ECB3E5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{22E93793-C9D8-DB48-9D49-5334F41C0C61}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{22E93793-C9D8-DB48-9D49-5334F41C0C61}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{22E93793-C9D8-DB48-9D49-5334F41C0C61}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{22E93793-C9D8-DB48-9D49-5334F41C0C61}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7F53268B-64F9-039B-D8EC-45C529A3A1F9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7F53268B-64F9-039B-D8EC-45C529A3A1F9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7F53268B-64F9-039B-D8EC-45C529A3A1F9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7F53268B-64F9-039B-D8EC-45C529A3A1F9}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E8C4F9A2-1B3D-4E5F-8A9C-D6E7F8A9B0C1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E8C4F9A2-1B3D-4E5F-8A9C-D6E7F8A9B0C1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E8C4F9A2-1B3D-4E5F-8A9C-D6E7F8A9B0C1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E8C4F9A2-1B3D-4E5F-8A9C-D6E7F8A9B0C1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {02BCB62C-BE78-4530-B682-0FFE89BA8F37}
+	EndGlobalSection
+EndGlobal
