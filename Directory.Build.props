@@ -10,16 +10,21 @@
 		<LangVersion>preview</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
-		<IncludeSymbols>true</IncludeSymbols>
-		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
 		<PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
 		<Description>SECS/GEM protocol library suite for semiconductor equipment communication</Description>
+		<PackageReadmeFile>README.md</PackageReadmeFile>
 		<EmbedUntrackedSources>true</EmbedUntrackedSources>
+		<DebugType>embedded</DebugType>
+		<IncludeSymbols>false</IncludeSymbols>
 	</PropertyGroup>
 
 	<ItemGroup>
 		<PackageReference Include="Nerdbank.GitVersioning" Version="3.9.50" PrivateAssets="All" />
 		<PackageReference Include="DotNet.ReproducibleBuilds" Version="2.0.2" PrivateAssets="all" />
 		<PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
 	</ItemGroup>
 </Project>
