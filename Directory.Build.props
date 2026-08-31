@@ -1,5 +1,11 @@
 <Project>
 	<PropertyGroup>
+		<Company>Prengemann Software Engineers</Company>
+		<PackageProjectUrl>https://github.com/Pre-Se/SecsGemBase</PackageProjectUrl>
+		<RepositoryUrl>https://github.com/Pre-Se/SecsGemBase</RepositoryUrl>
+		<RepositoryType>git</RepositoryType>
+		<PublishRepositoryUrl>true</PublishRepositoryUrl>
+		<PackageId>SecsGemBase.$(MSBuildProjectName.Replace('SecsGem', ''))</PackageId>
 		<TargetFramework>net10.0</TargetFramework>
 		<LangVersion>preview</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
