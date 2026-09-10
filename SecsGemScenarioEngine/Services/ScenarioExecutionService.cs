@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using Logging.Enums;
 using Logging.Interfaces;
 using Microsoft.Extensions.Logging;
 using SecsGemBaseItems.Data_Containers;
@@ -321,26 +322,27 @@ public class ScenarioExecutionService : IScenarioExecutionService
 
         logger.LogInformation("Sending {MessageName}...", message.Name);
 
-        var (error, reply) = replyMode && runContext.LastReceivedSystemBytes is { } systemBytes
-            ? await dataMessageHandler.SendDataMessage(message, systemBytes, token)
-            : await dataMessageHandler.SendDataMessage(message, token);
+        // Fire-and-forget — a Send node never blocks on a reply (no client-side T3 wait). If the
+        // scenario needs to wait for the reply, it uses an explicit Receive node, which is governed
+        // by the scenario's own timeout (0 = wait forever).
+        var systemBytes = replyMode && runContext.LastReceivedSystemBytes is { } capturedBytes
+            ? capturedBytes
+            : dataMessageHandler.NewSystemBytes();
 
-        if (error == TransactionHandlerError.None || error == TransactionHandlerError.DoesNotRequireAReply)
+        var status = await dataMessageHandler.SendDataMessageNoReply(message, systemBytes);
+        if (status != MessageStatus.Success)
         {
-            if (reply != null)
-                logger.LogInformation("Received reply for {MessageName}", message.Name);
-
-            // Capture what we sent so a later Send node can echo values back from it.
-            runContext.ReceivedByNode[node.Id] = message;
-            return new ScenarioExecutionResult { Success = true, CompletedSteps = 1 };
+            logger.LogError("Send {MessageName} failed ({Status})", message.Name, status);
+            return new ScenarioExecutionResult
+            {
+                Success = false,
+                ErrorMessage = $"Send '{message.Name}' failed ({status})"
+            };
         }
 
-        logger.LogError("Send {MessageName} failed: {Error}", message.Name, error);
-        return new ScenarioExecutionResult
-        {
-            Success = false,
-            ErrorMessage = $"Send '{message.Name}' failed: {error}"
-        };
+        // Capture what we sent so a later Send node can echo values back from it.
+        runContext.ReceivedByNode[node.Id] = message;
+        return new ScenarioExecutionResult { Success = true, CompletedSteps = 1 };
     }
 
     private async Task<ScenarioExecutionResult> ExecuteWaitAsync(ScenarioNode node, CancellationToken token)

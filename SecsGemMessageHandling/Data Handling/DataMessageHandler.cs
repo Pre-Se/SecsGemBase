@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Logging.Enums;
 using Logging.Interfaces;
 using Microsoft.Extensions.Logging;
 using SecsGemBaseItems.Data_Containers;
@@ -148,6 +149,23 @@ public partial class DataMessageHandler : ObservableObject
 
         await communicationHandler.SendAndLogMessage(message, systemBytes);
         return (TransactionHandlerError.DoesNotRequireAReply, null);
+    }
+
+    /// <summary>A fresh System Bytes value for an outgoing primary message.</summary>
+    public uint NewSystemBytes() => transactionHandler.CreateSystemBytes();
+
+    /// <summary>
+    /// Sends a data message and returns immediately, without the T3 request/reply tracking.
+    /// The scenario engine uses this so a Send node never blocks on a reply — replies are handled
+    /// by explicit Receive nodes governed by the scenario's own timeout.
+    /// </summary>
+    public async Task<MessageStatus> SendDataMessageNoReply(SecsGemDataMessage message, uint systemBytes)
+    {
+        if (!CanSendMessage(message))
+            return MessageStatus.Failure;
+
+        var log = await communicationHandler.SendAndLogMessage(message, systemBytes);
+        return log.Status;
     }
 
     public bool CanSendMessage(SecsGemDataMessage message)

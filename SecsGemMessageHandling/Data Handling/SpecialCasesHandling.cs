@@ -29,6 +29,16 @@ public class SpecialCasesHandling
 
     private async Task SearchMessageLibraryForResponse(SecsGemDataMessage receivedMessage, uint systemBytes)
     {
+        // S1F13 (Establish Communications Request) is answered by DataMessageHandler's built-in
+        // COMMACK handshake. Sending the library's S1F14 as well makes the peer receive two replies
+        // to one S1F13, so the library auto-reply stands down for this message type.
+        if (receivedMessage is { Stream: 1, Function: 13 })
+        {
+            Logger.LogDebug(
+                "S1F13: library auto-reply skipped — DataMessageHandler sends the COMMACK handshake");
+            return;
+        }
+
         // A running scenario is already answering this message type — don't send the library reply too.
         if (ScenarioReplyGuard?.Handles(receivedMessage.Stream, receivedMessage.Function) == true)
         {
