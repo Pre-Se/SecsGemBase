@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Logging.Interfaces;
 using SecsGemScenarioEngine.Models;
 
@@ -10,11 +11,13 @@ public interface IScenarioExecutionService
     /// iteration of a loop so a Receive node never re-consumes a message an earlier iteration already took.
     /// </param>
     /// <param name="deadline">Optional overall run deadline; the scenario fails if it doesn't finish in time.</param>
+    /// <param name="progress">Optional sink for per-node state updates (canvas feedback).</param>
     Task<ScenarioExecutionResult> ExecuteAsync(
         ScenarioGraph scenario,
         CancellationToken cancellation = default,
-        HashSet<ILoggedDataMessage>? consumedAcrossRuns = null,
-        TimeSpan? deadline = null);
+        ConcurrentDictionary<ILoggedDataMessage, byte>? consumedAcrossRuns = null,
+        TimeSpan? deadline = null,
+        IProgress<ScenarioNodeProgress>? progress = null);
     void Cancel();
 }
 
