@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Logging.Interfaces;
 using Microsoft.Extensions.Logging;
 using SecsGemBaseItems.Data_Containers;
 using SecsGemBaseItems.Data_Containers.Serialization;
@@ -32,9 +33,14 @@ public class ScenarioExecutionService : IScenarioExecutionService
         cts?.Cancel();
     }
 
-    public async Task<ScenarioExecutionResult> ExecuteAsync(ScenarioGraph scenario, CancellationToken cancellation = default)
+    public async Task<ScenarioExecutionResult> ExecuteAsync(
+        ScenarioGraph scenario,
+        CancellationToken cancellation = default,
+        HashSet<ILoggedDataMessage>? consumedAcrossRuns = null,
+        TimeSpan? deadline = null)
     {
-        cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        using var deadlineCts = deadline is { } d ? new CancellationTokenSource(d) : null;
+        cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation, deadlineCts?.Token ?? CancellationToken.None);
         var token = cts.Token;
 
         try
@@ -44,40 +50,75 @@ public class ScenarioExecutionService : IScenarioExecutionService
                 return new ScenarioExecutionResult { Success = false, ErrorMessage = "No Start node found in scenario" };
 
             var nodeMap = scenario.Nodes.ToDictionary(n => n.Id);
-            var visited = new HashSet<string>();
-            var runContext = new ScenarioRunContext();
-            string? currentId = startNode.Id;
-            int completed = 0;
+            var runContext = new ScenarioRunContext(consumedAcrossRuns);
+            var completed = 0;
+
+            // Branch frontier: (source node id, target node id) edges still to traverse. A plain
+            // linear scenario keeps exactly one entry at a time; a fork enqueues several; an And
+            // node holds a branch back until every incoming edge has arrived.
+            var frontier = new Queue<(string From, string To)>();
+            var startEdges = scenario.Edges.Where(e => e.SourceNodeId == startNode.Id && !e.IsFailurePath).ToList();
+            if (startEdges.Count == 0)
+                return new ScenarioExecutionResult
+                {
+                    Success = false,
+                    ErrorMessage = "Start node has no outgoing connection — wire it to the first step."
+                };
+            foreach (var edge in startEdges)
+                frontier.Enqueue((startNode.Id, edge.TargetNodeId));
+
+            var executed = new HashSet<string>();                       // non-And nodes run at most once per run
+            var andArrivals = new Dictionary<string, HashSet<string>>(); // And node id -> source ids that reached it
+            var firedAnds = new HashSet<string>();
+            var safety = Math.Max(64, scenario.Nodes.Count * 8);
 
             logger.LogInformation("Starting scenario '{ScenarioName}'", scenario.Name);
 
-            while (currentId != null)
+            while (frontier.Count > 0)
             {
                 token.ThrowIfCancellationRequested();
+                if (--safety < 0)
+                    return new ScenarioExecutionResult
+                    {
+                        Success = false,
+                        ErrorMessage = "Scenario did not settle (a loop without a Wait/Receive?)"
+                    };
 
-                if (!visited.Add(currentId))
-                    return new ScenarioExecutionResult { Success = false, ErrorMessage = "Cycle detected in scenario" };
-
-                if (!nodeMap.TryGetValue(currentId, out var node)) break;
+                var (from, id) = frontier.Dequeue();
+                if (!nodeMap.TryGetValue(id, out var node))
+                    continue;
 
                 if (node.Type == NodeType.End)
-                {
-                    logger.LogInformation("Scenario '{ScenarioName}' completed ({Steps} steps)", scenario.Name, completed);
-                    return new ScenarioExecutionResult { Success = true, CompletedSteps = completed };
-                }
+                    continue; // this branch is done; keep draining the others
 
-                if (node.Type == NodeType.Start)
+                if (node.Type == NodeType.And)
                 {
-                    var afterStart = GetNextNodeId(scenario, currentId, isSuccess: true);
-                    if (afterStart == null)
-                        return new ScenarioExecutionResult
-                        {
-                            Success = false,
-                            ErrorMessage = "Start node has no outgoing connection — wire it to the first step."
-                        };
-                    currentId = afterStart;
+                    if (firedAnds.Contains(id))
+                        continue;
+
+                    var required = scenario.Edges
+                        .Where(e => e.TargetNodeId == id && !e.IsFailurePath)
+                        .Select(e => e.SourceNodeId)
+                        .ToHashSet();
+                    if (!andArrivals.TryGetValue(id, out var arrived))
+                        andArrivals[id] = arrived = [];
+                    arrived.Add(from);
+
+                    if (!required.IsSubsetOf(arrived))
+                    {
+                        logger.LogInformation("AND {NodeId}: {Have}/{Need} branches arrived", id, arrived.Count, required.Count);
+                        continue; // hold this branch until the rest arrive
+                    }
+
+                    firedAnds.Add(id);
+                    completed++;
+                    logger.LogInformation("AND {NodeId}: all {Need} branches arrived — continuing", id, required.Count);
+                    EnqueueSuccessors(scenario, frontier, id);
                     continue;
                 }
+
+                if (!executed.Add(id))
+                    continue; // another branch already ran this node
 
                 logger.LogInformation("Executing node {NodeId} ({NodeType}): {TransactionName}",
                     node.Id, node.Type, node.TransactionName ?? "N/A");
@@ -86,11 +127,11 @@ public class ScenarioExecutionService : IScenarioExecutionService
 
                 if (!result.Success)
                 {
-                    var failureId = GetNextNodeId(scenario, currentId, isSuccess: false);
+                    var failureId = GetNextNodeId(scenario, id, isSuccess: false);
                     if (failureId != null)
                     {
-                        logger.LogInformation("Node {NodeId} failed, following failure path", currentId);
-                        currentId = failureId;
+                        logger.LogInformation("Node {NodeId} failed, following failure path", id);
+                        frontier.Enqueue((id, failureId));
                         continue;
                     }
 
@@ -104,7 +145,13 @@ public class ScenarioExecutionService : IScenarioExecutionService
                 }
 
                 completed++;
-                currentId = GetNextNodeId(scenario, currentId, isSuccess: true);
+                EnqueueSuccessors(scenario, frontier, id);
+            }
+
+            foreach (var (andId, arrived) in andArrivals)
+            {
+                if (!firedAnds.Contains(andId))
+                    logger.LogWarning("AND {NodeId} never received all its branches ({Have} arrived) — scenario ended without passing it", andId, arrived.Count);
             }
 
             logger.LogInformation("Scenario '{ScenarioName}' completed ({Steps} steps)", scenario.Name, completed);
@@ -112,6 +159,12 @@ public class ScenarioExecutionService : IScenarioExecutionService
         }
         catch (OperationCanceledException)
         {
+            if (deadlineCts?.IsCancellationRequested == true && !cancellation.IsCancellationRequested)
+            {
+                logger.LogWarning("Scenario '{ScenarioName}' timed out after {Seconds:0}s", scenario.Name, deadline!.Value.TotalSeconds);
+                return new ScenarioExecutionResult { Success = false, ErrorMessage = $"Scenario timed out ({deadline.Value.TotalSeconds:0}s)" };
+            }
+
             logger.LogInformation("Scenario '{ScenarioName}' was cancelled", scenario.Name);
             return new ScenarioExecutionResult { Success = false, ErrorMessage = "Cancelled" };
         }
@@ -122,6 +175,12 @@ public class ScenarioExecutionService : IScenarioExecutionService
         return scenario.Edges
             .FirstOrDefault(e => e.SourceNodeId == nodeId && e.IsFailurePath == !isSuccess)
             ?.TargetNodeId;
+    }
+
+    private static void EnqueueSuccessors(ScenarioGraph scenario, Queue<(string From, string To)> frontier, string nodeId)
+    {
+        foreach (var edge in scenario.Edges.Where(e => e.SourceNodeId == nodeId && !e.IsFailurePath))
+            frontier.Enqueue((nodeId, edge.TargetNodeId));
     }
 
     private async Task<ScenarioExecutionResult> ExecuteNodeAsync(ScenarioNode node, ScenarioRunContext runContext, CancellationToken token)
@@ -143,6 +202,9 @@ public class ScenarioExecutionService : IScenarioExecutionService
 
             case NodeType.Wait:
                 return await ExecuteWaitAsync(node, token);
+
+            case NodeType.And:
+                return new ScenarioExecutionResult { Success = true }; // join logic handled in ExecuteAsync
 
             default:
                 return new ScenarioExecutionResult
@@ -240,7 +302,10 @@ public class ScenarioExecutionService : IScenarioExecutionService
                    && msg.Function == expectedMessage.Function
                    && conditions.TrueForAll(c => c.Evaluate(msg)),
             TimeSpan.FromSeconds(30),
-            token);
+            token,
+            // Don't let this Receive node re-consume a buffered message an earlier Receive already took —
+            // each Receive in a chain must wait for its own inbound message.
+            logged => !runContext.ConsumedMessages.Contains(logged));
 
         if (received == null)
         {
@@ -253,15 +318,18 @@ public class ScenarioExecutionService : IScenarioExecutionService
             };
         }
 
+        runContext.ConsumedMessages.Add(received);
         runContext.LastReceived = received.Data;
         runContext.LastReceivedSystemBytes = received.HeaderData.SystemBytes;
+        runContext.ReceivedByNode[node.Id] = received.Data;
         logger.LogInformation("Received matching {MessageName}", expectedMessage.Name);
         return new ScenarioExecutionResult { Success = true, CompletedSteps = 1 };
     }
 
     /// <summary>
-    /// Applies a Send node's <see cref="ScenarioNode.ResponseBindingsJson"/> to <paramref name="outgoing"/>,
-    /// pulling values from the message captured by the most recent upstream Receive node.
+    /// Applies a Send node's <see cref="ScenarioNode.ResponseBindingsJson"/> to <paramref name="outgoing"/>.
+    /// Each binding pulls from the message captured by its <see cref="ValueBinding.SourceNodeId"/> Receive node,
+    /// or from the most recently received message when that id is unset/unknown.
     /// </summary>
     private void ApplyResponseBindings(ScenarioNode node, SecsGemDataMessage outgoing, ScenarioRunContext runContext)
     {
@@ -272,25 +340,42 @@ public class ScenarioExecutionService : IScenarioExecutionService
         if (bindings.Count == 0)
             return;
 
-        if (runContext.LastReceived is null)
+        if (runContext.ReceivedByNode.Count == 0 && runContext.LastReceived is null)
         {
             logger.LogWarning(
                 "Node {NodeId} has response bindings but no message has been received yet in this run", node.Id);
             return;
         }
 
+        SecsGemDataMessage? Resolve(string? sourceNodeId) =>
+            !string.IsNullOrEmpty(sourceNodeId) && runContext.ReceivedByNode.TryGetValue(sourceNodeId, out var m)
+                ? m
+                : runContext.LastReceived;
+
         foreach (var binding in bindings)
         {
-            if (!binding.Apply(outgoing, runContext.LastReceived))
+            if (!binding.Apply(outgoing, Resolve))
                 logger.LogWarning("Node {NodeId}: binding {Binding} could not be applied", node.Id, binding);
         }
     }
 
-    /// <summary>Per-run state threaded through node execution: the message the most recent Receive node matched.</summary>
+    /// <summary>Per-run state threaded through node execution.</summary>
     private sealed class ScenarioRunContext
     {
+        public ScenarioRunContext(HashSet<ILoggedDataMessage>? sharedConsumed)
+        {
+            ConsumedMessages = sharedConsumed ?? new HashSet<ILoggedDataMessage>(ReferenceEqualityComparer.Instance);
+        }
+
+        /// <summary>The message matched by the most recent Receive node (fallback source for bindings).</summary>
         public SecsGemDataMessage? LastReceived { get; set; }
         public uint? LastReceivedSystemBytes { get; set; }
+
+        /// <summary>Every message received so far this run, keyed by the Receive node's id.</summary>
+        public Dictionary<string, SecsGemDataMessage> ReceivedByNode { get; } = [];
+
+        /// <summary>Logged messages already consumed by a Receive node (reference identity). May be shared across loop iterations.</summary>
+        public HashSet<ILoggedDataMessage> ConsumedMessages { get; }
     }
 
     private SecsGemTransaction? FindTransaction(ScenarioNode node)

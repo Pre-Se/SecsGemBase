@@ -146,6 +146,40 @@ public class ResponderTests
     }
 
     [Fact]
+    public void Binding_echo_pulls_from_the_named_source_node()
+    {
+        var first = BuildS6F11(carrierId: "FROM-FIRST");   // captured by node "rx1"
+        var second = BuildS6F11(carrierId: "FROM-SECOND"); // captured by node "rx2"
+
+        SecsGemDataMessage Resolve(string? id) => id == "rx1" ? first : second;
+
+        var outgoing = BuildS2F41();
+        var binding = new ValueBinding
+        {
+            TargetItemPath = CpValPath,
+            Source = BindingSourceKind.Echo,
+            SourceRef = CarrierIdPath,
+            SourceNodeId = "rx1"
+        };
+
+        Assert.True(binding.Apply(outgoing, Resolve));
+        Assert.True(SecsGemItemPath.TryResolve(outgoing, CpValPath, out var cpval));
+        Assert.Equal("FROM-FIRST", cpval.GetStringValues().Single());
+    }
+
+    [Fact]
+    public void Binding_without_source_node_id_uses_the_resolver_fallback()
+    {
+        var last = BuildS6F11(carrierId: "LAST");
+        var outgoing = BuildS2F41();
+        var binding = new ValueBinding { TargetItemPath = CpValPath, Source = BindingSourceKind.Echo, SourceRef = CarrierIdPath };
+
+        Assert.True(binding.Apply(outgoing, _ => last));
+        Assert.True(SecsGemItemPath.TryResolve(outgoing, CpValPath, out var cpval));
+        Assert.Equal("LAST", cpval.GetStringValues().Single());
+    }
+
+    [Fact]
     public void Binding_unresolvable_path_is_a_no_op()
     {
         var outgoing = BuildS2F41();

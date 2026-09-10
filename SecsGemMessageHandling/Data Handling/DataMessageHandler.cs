@@ -317,7 +317,8 @@ public partial class DataMessageHandler : ObservableObject
     }
 
     public async Task<ILoggedDataMessage?> WaitForReceivedMessage(
-        Func<SecsGemDataMessage, bool> predicate, TimeSpan timeout, CancellationToken cancellation = default)
+        Func<SecsGemDataMessage, bool> predicate, TimeSpan timeout, CancellationToken cancellation = default,
+        Func<ILoggedDataMessage, bool>? accept = null)
     {
         var tcs = new TaskCompletionSource<ILoggedDataMessage?>();
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
@@ -325,21 +326,24 @@ public partial class DataMessageHandler : ObservableObject
 
         using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
 
+        bool Matches(ILoggedDataMessage msg) => predicate(msg.Data) && (accept?.Invoke(msg) ?? true);
+
         IDisposable? subscription = null;
         subscription = communicationHandler.OnDataMessageIn.Subscribe(msg =>
         {
-            if (predicate(msg.Data))
+            if (Matches(msg))
             {
                 tcs.TrySetResult(msg);
                 subscription?.Dispose();
             }
         });
 
-        // Check messages that arrived before the subscription was set up
+        // Check messages that arrived before the subscription was set up. The 'accept' filter lets
+        // callers (e.g. the scenario engine) skip a buffered message an earlier step already consumed.
         var cutoff = DateTime.UtcNow - MessageBufferWindow;
         foreach (var (receivedAt, msg) in _recentMessages)
         {
-            if (receivedAt >= cutoff && predicate(msg.Data))
+            if (receivedAt >= cutoff && Matches(msg))
             {
                 tcs.TrySetResult(msg);
                 break;

@@ -8,5 +8,8 @@ public enum NodeType
     End,
     Condition,
     Wait,
-    Receive
+    Receive,
+
+    /// <summary>Join node: only continues once every incoming connection has been reached.</summary>
+    And
 }

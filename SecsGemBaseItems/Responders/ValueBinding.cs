@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using SecsGemBaseItems.Data_Containers;
@@ -28,8 +29,23 @@ public sealed class ValueBinding
     public BindingSourceKind Source { get; set; } = BindingSourceKind.Literal;
     public string SourceRef { get; set; } = string.Empty;
 
-    /// <summary>Applies this binding. Returns <c>false</c> (and leaves the message untouched) when a path cannot be resolved.</summary>
-    public bool Apply(SecsGemDataMessage outgoing, SecsGemDataMessage incoming)
+    /// <summary>
+    /// Echo / CopyBranch only: id of the upstream Receive node whose captured message this pulls from.
+    /// Null or empty means "the most recently received message in the run" (keeps older bindings working).
+    /// </summary>
+    public string? SourceNodeId { get; set; }
+
+    /// <summary>Applies this binding against a single incoming message. Returns <c>false</c> when a path cannot be resolved.</summary>
+    public bool Apply(SecsGemDataMessage outgoing, SecsGemDataMessage? incoming)
+        => Apply(outgoing, _ => incoming);
+
+    /// <summary>
+    /// Applies this binding. For Echo / CopyBranch, <paramref name="resolveIncoming"/> is called with
+    /// <see cref="SourceNodeId"/> and must return the message captured by that Receive node
+    /// (or a sensible fallback when the id is null/unknown). Returns <c>false</c> when a path or message
+    /// cannot be resolved.
+    /// </summary>
+    public bool Apply(SecsGemDataMessage outgoing, Func<string?, SecsGemDataMessage?> resolveIncoming)
     {
         switch (Source)
         {
@@ -40,17 +56,27 @@ public sealed class ValueBinding
                 return true;
 
             case BindingSourceKind.Echo:
+            {
+                var incoming = resolveIncoming(SourceNodeId);
+                if (incoming is null)
+                    return false;
                 if (!SecsGemItemPath.TryResolve(incoming, SourceRef, out var echoSource))
                     return false;
                 if (!SecsGemItemPath.TryResolve(outgoing, TargetItemPath, out var echoTarget))
                     return false;
                 echoTarget.SetValuesFromStrings(echoSource.GetStringValues().ToArray());
                 return true;
+            }
 
             case BindingSourceKind.CopyBranch:
+            {
+                var incoming = resolveIncoming(SourceNodeId);
+                if (incoming is null)
+                    return false;
                 if (!SecsGemItemPath.TryResolve(incoming, SourceRef, out var branchSource))
                     return false;
                 return SecsGemItemPath.ReplaceNode(outgoing, TargetItemPath, branchSource.Clone());
+            }
 
             default:
                 return false;
