@@ -11,12 +11,14 @@ public class SpecialCasesHandling
     private CommunicationHandler CommunicationHandler { get; }
     private ILogger<SpecialCasesHandling> Logger { get; }
     private ISecsGemLibraryManager SecsGemLibraryManager { get; }
+    private ScenarioReplyGuard? ScenarioReplyGuard { get; }
 
-    public SpecialCasesHandling(CommunicationHandler communicationHandler, ILogger<SpecialCasesHandling> logger, ISecsGemLibraryManager secsGemLibraryManager)
+    public SpecialCasesHandling(CommunicationHandler communicationHandler, ILogger<SpecialCasesHandling> logger, ISecsGemLibraryManager secsGemLibraryManager, ScenarioReplyGuard? scenarioReplyGuard = null)
     {
         CommunicationHandler = communicationHandler;
         Logger = logger;
         SecsGemLibraryManager = secsGemLibraryManager;
+        ScenarioReplyGuard = scenarioReplyGuard;
         CommunicationHandler.OnDataMessageIn.Subscribe(OnMessageIn);
     }
 
@@ -27,6 +29,15 @@ public class SpecialCasesHandling
 
     private async Task SearchMessageLibraryForResponse(SecsGemDataMessage receivedMessage, uint systemBytes)
     {
+        // A running scenario is already answering this message type — don't send the library reply too.
+        if (ScenarioReplyGuard?.Handles(receivedMessage.Stream, receivedMessage.Function) == true)
+        {
+            Logger.LogInformation(
+                "S{Stream}F{Function}: library auto-reply skipped — a running scenario handles it",
+                receivedMessage.Stream, receivedMessage.Function);
+            return;
+        }
+
         var library = SecsGemLibraryManager.Library;
 
         foreach (var transaction in library)

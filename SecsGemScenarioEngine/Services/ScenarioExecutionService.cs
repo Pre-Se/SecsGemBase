@@ -16,16 +16,19 @@ public class ScenarioExecutionService : IScenarioExecutionService
     private readonly DataMessageHandler dataMessageHandler;
     private readonly ISecsGemLibraryManager libraryManager;
     private readonly ILogger<ScenarioExecutionService> logger;
+    private readonly ScenarioReplyGuard replyGuard;
     private CancellationTokenSource? cts;
 
     public ScenarioExecutionService(
         DataMessageHandler dataMessageHandler,
         ISecsGemLibraryManager libraryManager,
-        ILogger<ScenarioExecutionService> logger)
+        ILogger<ScenarioExecutionService> logger,
+        ScenarioReplyGuard replyGuard)
     {
         this.dataMessageHandler = dataMessageHandler;
         this.libraryManager = libraryManager;
         this.logger = logger;
+        this.replyGuard = replyGuard;
     }
 
     public void Cancel()
@@ -50,8 +53,16 @@ public class ScenarioExecutionService : IScenarioExecutionService
                 return new ScenarioExecutionResult { Success = false, ErrorMessage = "No Start node found in scenario" };
 
             var nodeMap = scenario.Nodes.ToDictionary(n => n.Id);
-            var runContext = new ScenarioRunContext(consumedAcrossRuns);
+            var runContext = new ScenarioRunContext(consumedAcrossRuns)
+            {
+                // No deadline => Receive nodes wait indefinitely (until the message arrives or the run
+                // is cancelled). A deadline caps each wait and the whole run.
+                ReceiveTimeout = deadline ?? Timeout.InfiniteTimeSpan
+            };
             var completed = 0;
+
+            // Tell the library auto-reply to stand down for every message type this scenario answers itself.
+            using var replyClaim = replyGuard.BeginRun(CollectReceivedStreamFunctions(scenario).ToList());
 
             // Branch frontier: (source node id, target node id) edges still to traverse. A plain
             // linear scenario keeps exactly one entry at a time; a fork enqueues several; an And
@@ -183,6 +194,18 @@ public class ScenarioExecutionService : IScenarioExecutionService
             frontier.Enqueue((nodeId, edge.TargetNodeId));
     }
 
+    /// <summary>The Stream/Function of every message a Receive node in this scenario is waiting for.</summary>
+    private IEnumerable<(byte Stream, byte Function)> CollectReceivedStreamFunctions(ScenarioGraph scenario)
+    {
+        foreach (var node in scenario.Nodes.Where(n => n.Type == NodeType.Receive))
+        {
+            var transaction = FindTransaction(node);
+            if (transaction == null) continue;
+            var expected = node.UseReplyMessage ? transaction.ReplyMessage : transaction.PrimaryMessage;
+            yield return (expected.Stream, expected.Function);
+        }
+    }
+
     private async Task<ScenarioExecutionResult> ExecuteNodeAsync(ScenarioNode node, ScenarioRunContext runContext, CancellationToken token)
     {
         switch (node.Type)
@@ -301,7 +324,7 @@ public class ScenarioExecutionService : IScenarioExecutionService
             msg => msg.Stream == expectedMessage.Stream
                    && msg.Function == expectedMessage.Function
                    && conditions.TrueForAll(c => c.Evaluate(msg)),
-            TimeSpan.FromSeconds(30),
+            runContext.ReceiveTimeout,
             token,
             // Don't let this Receive node re-consume a buffered message an earlier Receive already took —
             // each Receive in a chain must wait for its own inbound message.
@@ -370,6 +393,9 @@ public class ScenarioExecutionService : IScenarioExecutionService
         /// <summary>The message matched by the most recent Receive node (fallback source for bindings).</summary>
         public SecsGemDataMessage? LastReceived { get; set; }
         public uint? LastReceivedSystemBytes { get; set; }
+
+        /// <summary>How long a Receive node waits: the run deadline, or infinite when none is set.</summary>
+        public TimeSpan ReceiveTimeout { get; init; } = Timeout.InfiniteTimeSpan;
 
         /// <summary>Every message received so far this run, keyed by the Receive node's id.</summary>
         public Dictionary<string, SecsGemDataMessage> ReceivedByNode { get; } = [];
