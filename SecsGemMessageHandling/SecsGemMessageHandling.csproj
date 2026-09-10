@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Title>SECS/GEM Message Handler</Title>
+    <Description>Small library class to send and receive SECS/GEM messages</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentResults" Version="4.0.0" />
+    <PackageReference Include="System.Reactive" Version="7.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Logging\Logging.csproj" />
+    <ProjectReference Include="..\SecsGemBaseItems\SecsGemBaseItems.csproj" />
+    <ProjectReference Include="..\SecsGemHelperClasses\SecsGemHelperClasses.csproj" />
+    <ProjectReference Include="..\TCPIPBaseLibrary\TCPIPBaseLibrary.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="DotNet.ReproducibleBuilds" Version="2.0.5" />
+    <PackageReference Update="Microsoft.SourceLink.GitHub" Version="10.0.401" />
+    <PackageReference Update="Nerdbank.GitVersioning" Version="3.10.94" />
+  </ItemGroup>
+
+</Project>

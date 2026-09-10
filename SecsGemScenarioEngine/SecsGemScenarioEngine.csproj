@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Title>SECS/GEM Scenario Engine</Title>
+    <Description>Graph-based scenario execution engine for SECS/GEM message sequences</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SecsGemMessageHandling\SecsGemMessageHandling.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Update="DotNet.ReproducibleBuilds" Version="2.0.5" />
+    <PackageReference Update="Microsoft.SourceLink.GitHub" Version="10.0.401" />
+    <PackageReference Update="Nerdbank.GitVersioning" Version="3.10.94" />
+  </ItemGroup>
+
+</Project>
