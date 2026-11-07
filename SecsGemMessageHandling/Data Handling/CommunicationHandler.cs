@@ -136,7 +136,8 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         try
         {
             ConnectionOn = true;
-            Task.Run(ConnectLoopAsync);
+            var connection = TCPIPBase;
+            Task.Run(() => ConnectLoopAsync(connection));
         }
         finally
         {
@@ -170,7 +171,8 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
             if (ConnectionOn)
             {
                 ConnectionStatus = ConnectionStatus.PortOpen;
-                Task.Run(ConnectLoopAsync);
+                var connection = TCPIPBase;
+                Task.Run(() => ConnectLoopAsync(connection));
             }
             else
             {
@@ -258,16 +260,34 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         if (TCPIPBase is TCPIPClientBase clientBase) clientBase.ConnectSeparationTimeout = (int)hsmsParameters.T5;
     }
 
-    private async Task ConnectLoopAsync()
+    private async Task ConnectLoopAsync(ITCPIPBase connection)
     {
         try
         {
-            await TCPIPBase.Connect();
+            await connection.Connect().ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             logger.LogError("Unhandled exception: {Exception}", ex.Message);
-            ClosePort();
+            ClosePortIfCurrent(connection);
+        }
+    }
+
+    // The loop of a connection that RestartConnection/ClosePort has already replaced must not close its successor.
+    // Checked under the lock: RestartConnection holds it from disposing the old connection until the new one is set.
+    private void ClosePortIfCurrent(ITCPIPBase connection)
+    {
+        connectionStatusSemaphore.Wait();
+        try
+        {
+            if (!ReferenceEquals(connection, TCPIPBase)) return;
+            ConnectionOn = false;
+            DisposeConnection();
+            BuildConnectionBase();
+        }
+        finally
+        {
+            connectionStatusSemaphore.Release();
         }
     }
 
