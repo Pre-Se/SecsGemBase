@@ -74,7 +74,9 @@ public class TCPIPServerBase : ITCPIPBase
         }
         finally
         {
-            connectionSemaphore.Release();
+            // Dispose() may already have disposed the semaphore: it waits at most 5 s for the loop and races with
+            // this finally. TCPIPClientBase.Connect handles this the same way.
+            try { connectionSemaphore.Release(); } catch (ObjectDisposedException) { }
             OnDisconnected?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -99,6 +101,12 @@ public class TCPIPServerBase : ITCPIPBase
         catch (OperationCanceledException)
         {
             Logger.LogInformation("Stopped listening for incoming connections");
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref isDisposed) == 1)
+        {
+            // If a pending client is accepted synchronously, Connect() assigns receiveDataLoopTask only after this
+            // method yields, so Dispose() does not wait for it and may dispose the client or listener first.
+            Logger.LogInformation("Connection was disposed");
         }
     }
 
