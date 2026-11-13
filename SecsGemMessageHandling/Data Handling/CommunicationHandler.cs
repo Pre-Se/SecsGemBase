@@ -103,7 +103,24 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     private readonly INetworkConnectionFactory connectionFactory;
     private readonly ILogger<CommunicationHandler> logger;
     private readonly ControlMessageFactory controlMessageFactory;
-    private ITCPIPBase TCPIPBase { get; set; }
+    // Volatile: OnConnected reads it on the connection's loop without holding the lock.
+    private ITCPIPBase TCPIPBase
+    {
+        get => Volatile.Read(ref tcpipBase);
+        set => Volatile.Write(ref tcpipBase, value);
+    }
+
+    private ITCPIPBase tcpipBase = null!;
+
+    /// <summary>
+    ///     Cancelled by <see cref="DisposeConnection"/> before it disposes the current connection. A late OnConnected
+    ///     of that connection then stops waiting for the lock: the disposing thread holds it while Dispose() waits up
+    ///     to 5 s for the very loop that raised OnConnected. Replaced in <see cref="BuildConnectionBase"/>.
+    /// </summary>
+    private CancellationTokenSource connectionDisposing = new();
+
+    /// <summary>The handler subscribed to the current connection's OnConnect, bound to that connection object.</summary>
+    private EventHandler? connectionOnConnect;
 
 
     private CancellationTokenSource ConnectionCancellationTokenSource { get; set; } = new();
@@ -118,8 +135,14 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     }
 
     /// <summary>
-    ///     Event that is raised when a connection is established
+    ///     Event that is raised when a connection is established, after <see cref="ConnectionStatus"/> has become
+    ///     <see cref="Enums.ConnectionStatus.Connected"/>.
     /// </summary>
+    /// <remarks>
+    ///     Raised synchronously on the connection's receive loop, before it reads the first message, and outside the
+    ///     connection lock. Handlers should not block: <see cref="ClosePort"/> or <see cref="RestartConnection()"/>
+    ///     called directly from a handler waits up to 5 s for this very loop; start them with Task.Run instead.
+    /// </remarks>
     public event EventHandler? OnConnect;
 
     /// <summary>
@@ -149,9 +172,11 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         connectionStatusSemaphore.Wait();
         try
         {
-            ConnectionOn = false;
             DisposeConnection();
             BuildConnectionBase();
+            // Status last, like RestartConnection: OnDisconnect then follows the OnConnect handlers that the old
+            // connection's loop may still be running (Dispose waited for that loop).
+            ConnectionOn = false;
         }
         finally
         {
@@ -231,7 +256,9 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         switch (status)
         {
             case MessageStatus.Failure:
-                RestartConnection();
+                // Queued, not inline: the caller may be an OnConnect handler on the connection's own loop
+                // (Select.req), and Dispose() of that connection waits for this very loop.
+                RestartConnection(this, EventArgs.Empty);
                 break;
             case MessageStatus.Success:
                 messageBus.Publish(log);
@@ -281,9 +308,9 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         try
         {
             if (!ReferenceEquals(connection, TCPIPBase)) return;
-            ConnectionOn = false;
             DisposeConnection();
             BuildConnectionBase();
+            ConnectionOn = false; // last, see ClosePort
         }
         finally
         {
@@ -296,7 +323,8 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     /// </summary>
     private void DisposeConnection()
     {
-        TCPIPBase.OnConnect -= OnConnected;
+        Volatile.Read(ref connectionDisposing).Cancel();
+        TCPIPBase.OnConnect -= connectionOnConnect;
         TCPIPBase.OnDisconnected -= RestartConnection;
         TCPIPBase.Dispose();
     }
@@ -327,7 +355,8 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
 
         if (status != MessageStatus.Failure) return (MessageStatus.Success, rawData, header);
 
-        RestartConnection();
+        // Queued, not inline, like in SendStateMessage.
+        RestartConnection(this, EventArgs.Empty);
         return (MessageStatus.Failure, rawData, header);
 
     }
@@ -402,38 +431,88 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
 
     private ITCPIPBase BuildConnectionBase()
     {
-        TCPIPBase = CreateNewConnectionBase();
-        TCPIPBase.OnDataReceived.Subscribe(ParseDataReceived);
-        TCPIPBase.OnConnect += OnConnected;
-        TCPIPBase.OnDisconnected += RestartConnection;
-        if (TCPIPBase is TCPIPClientBase clientBase) clientBase.ConnectSeparationTimeout = (int)hsmsParameters.T5;
+        var connection = CreateNewConnectionBase();
+        TCPIPBase = connection;
+        connection.OnDataReceived.Subscribe(ParseDataReceived);
+        // Bound to this object rather than taken from the event's sender: an ITCPIPBase decorator may pass on the
+        // sender of the connection it wraps.
+        connectionOnConnect = (_, _) => OnConnected(connection);
+        connection.OnConnect += connectionOnConnect;
+        connection.OnDisconnected += RestartConnection;
+        if (connection is TCPIPClientBase clientBase) clientBase.ConnectSeparationTimeout = (int)hsmsParameters.T5;
+        // Last, after TCPIPBase: OnConnected reads the token first and the connection second (see there).
+        Volatile.Write(ref connectionDisposing, new CancellationTokenSource());
 
-        return TCPIPBase;
+        return connection;
     }
 
+    /// <summary>
+    ///     Restarts the connection on the thread pool. Requests that arrive while a restart is pending are dropped.
+    ///     Used for OnDisconnected and failed sends, which may come from a connection's own loop or from a thread
+    ///     that holds <see cref="connectionStatusSemaphore"/>.
+    /// </summary>
     private void RestartConnection(object? sender, EventArgs e)
     {
         if (Interlocked.CompareExchange(ref restartPending, 1, 0) == 0)
             Task.Run(() =>
             {
-                RestartConnection();
-                Interlocked.Exchange(ref restartPending, 0);
+                try
+                {
+                    RestartConnection();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError("Restarting the connection failed: {Error}", ex.Message);
+                }
+                finally
+                {
+                    // Reset even if the restart threw, or no automatic restart would ever run again.
+                    Interlocked.Exchange(ref restartPending, 0);
+                }
             });
     }
 
-    private void OnConnected(object? sender, EventArgs eventArgs)
+    private void OnConnected(ITCPIPBase connection)
     {
-        connectionStatusSemaphore.Wait();
+        // Token first, connection second: if the token is already the successor's, TCPIPBase is the successor too and
+        // the check below drops this report. Otherwise the token is this connection's own, and RestartConnection or
+        // ClosePort cancels it, while holding the lock, before Dispose() starts waiting for this loop.
+        var disposing = Volatile.Read(ref connectionDisposing).Token;
+        if (!ReferenceEquals(connection, TCPIPBase))
+        {
+            logger.LogDebug("Ignoring the connect of a connection that has already been replaced");
+            return;
+        }
+
         try
         {
-            if (!ConnectionOn) return;
-            OnConnect?.Invoke(this, EventArgs.Empty);
+            connectionStatusSemaphore.Wait(disposing);
+        }
+        catch (OperationCanceledException)
+        {
+            logger.LogDebug("Ignoring the connect of a connection that is being closed");
+            return;
+        }
+
+        try
+        {
+            // A connection that RestartConnection/ClosePort has already replaced may still report its connect:
+            // its loop read the delegate before DisposeConnection unsubscribed it.
+            if (!ConnectionOn || !ReferenceEquals(connection, TCPIPBase)) return;
             ConnectionStatus = ConnectionStatus.Connected;
         }
         finally
         {
             connectionStatusSemaphore.Release();
         }
+
+        // Outside the lock: subscribers send (ControlMessageHandling: Select.req) and may reach RestartConnection or
+        // ClosePort synchronously, and SemaphoreSlim is not reentrant. This check is not atomic with the handlers: a
+        // restart can still overlap them (e.g. when Dispose() did not wait for this loop because its first
+        // ConnectAsync/Accept completed synchronously). ControlMessageHandling therefore only applies NotSelected
+        // while the connection is Connected.
+        if (!ReferenceEquals(connection, TCPIPBase)) return;
+        OnConnect?.Invoke(this, EventArgs.Empty);
     }
 
     private ITCPIPBase CreateNewConnectionBase()

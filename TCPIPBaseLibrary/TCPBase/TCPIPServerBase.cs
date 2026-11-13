@@ -89,10 +89,13 @@ public class TCPIPServerBase : ITCPIPBase
 
             TcpListener.Start();
             ConnectedClient = await TcpListener.AcceptTcpClientAsync(ConnectionCancellationTokenSource.Token);
+            // Take the stream before OnConnect (see TCPIPClientBase): a failed send in a handler would make
+            // GetStream() throw InvalidOperationException.
+            var stream = ConnectedClient.GetStream();
             TcpListener.Stop();
             OnConnect?.Invoke(this, EventArgs.Empty);
 
-            await this.ReceiveDataLoopAsync(ConnectedClient.GetStream(), Logger, ConnectionCancellationTokenSource.Token);
+            await this.ReceiveDataLoopAsync(stream, Logger, ConnectionCancellationTokenSource.Token);
         }
         catch (SocketException e)
         {
@@ -102,11 +105,15 @@ public class TCPIPServerBase : ITCPIPBase
         {
             Logger.LogInformation("Stopped listening for incoming connections");
         }
-        catch (ObjectDisposedException) when (Volatile.Read(ref isDisposed) == 1)
+        catch (Exception e) when (Volatile.Read(ref isDisposed) == 1)
         {
-            // If a pending client is accepted synchronously, Connect() assigns receiveDataLoopTask only after this
-            // method yields, so Dispose() does not wait for it and may dispose the client or listener first.
-            Logger.LogInformation("Connection was disposed");
+            // Dispose() does not wait for the loop while receiveDataLoopTask is still unassigned (Connect() stores it
+            // only after this method first yields, e.g. after a synchronous accept), so it may cancel and dispose the
+            // client or listener while the loop runs. Depending on where that hits, GetStream() throws
+            // ObjectDisposedException, InvalidOperationException or IOException, and a ReadAsync that has already passed
+            // its own cancellation check (in Socket.ReceiveAsync) fails with an IOException wrapping
+            // ObjectDisposedException. After Dispose() all of them only mean that the connection is gone.
+            Logger.LogInformation("Connection was disposed ({Error})", e.GetType().Name);
         }
     }
 
@@ -162,6 +169,11 @@ public class TCPIPServerBase : ITCPIPBase
                     Logger.LogWarning("Connection loop did not stop within timeout, continuing disposal");
             }
             catch (OperationCanceledException) { }
+            catch (AggregateException ae)
+            {
+                // Task.Wait wraps a faulted loop; Dispose must not throw (see TCPIPClientBase).
+                Logger.LogWarning("Connection loop ended with {Error}", ae.InnerException?.Message);
+            }
         }
 
         ConnectionCancellationTokenSource.Dispose();

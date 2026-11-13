@@ -66,10 +66,14 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
             try
             {
                 await tcpClient.ConnectAsync(IpAddress, Port, cancellationToken);
+                // Take the stream before SendData can reach the client and before OnConnect: a handler whose send
+                // fails (the remote side has already reset) leaves the socket "not connected", and GetStream() would
+                // then throw InvalidOperationException out of the loop.
+                var stream = tcpClient.GetStream();
                 Volatile.Write(ref activeTcpClient, tcpClient);
                 wasConnected = true;
                 OnConnect?.Invoke(this, EventArgs.Empty);
-                await this.ReceiveDataLoopAsync(tcpClient.GetStream(), Logger, cancellationToken);
+                await this.ReceiveDataLoopAsync(stream, Logger, cancellationToken);
             }
             catch (OperationCanceledException)
             {
@@ -137,6 +141,11 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
             catch (OperationCanceledException) { }
             catch (AggregateException ae) when (ae.InnerExceptions.All(e =>
                 e is OperationCanceledException or IOException or SocketException)) { }
+            catch (AggregateException ae)
+            {
+                // Dispose must not throw: callers (CommunicationHandler.RestartConnection) would stop halfway.
+                Logger.LogWarning("Connection loop ended with {Error}", ae.InnerException?.Message);
+            }
         }
 
         ConnectionCancellationTokenSource.Dispose();
