@@ -52,15 +52,17 @@ public class TCPIPServerBaseTests
     {
         var port = GetFreePort();
         var server = new FlagOnlyDisposeServer(PassiveSettings(port));
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         server.OnConnect += (_, _) =>
         {
             server.MarkDisposed();
+            accepted.TrySetResult();
             ConnectedClient(server)!.Client.SafeHandle.Dispose();
         };
 
         var loop = Task.Run(server.Connect);
         using var client = new TcpClient();
-        await ConnectWithRetryAsync(client, port);
+        await ConnectWithRetryAsync(client, port, accepted.Task);
 
         var error = await Record.ExceptionAsync(() => loop.WaitAsync(TimeSpan.FromSeconds(10)));
 
@@ -93,8 +95,10 @@ public class TCPIPServerBaseTests
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    // Connect() starts the listener asynchronously, so the first attempts may be refused.
-    private static async Task ConnectWithRetryAsync(TcpClient client, int port)
+    // Connect() starts the listener asynchronously, so the first attempts may be refused. With 'accepted', retrying
+    // stops once the server has reported the connect: a server that closes the accepted socket at once can make the
+    // client's connect fail with a reset under load, and further attempts would only meet a server that has finished.
+    private static async Task ConnectWithRetryAsync(TcpClient client, int port, Task? accepted = null)
     {
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (true)
@@ -102,6 +106,10 @@ public class TCPIPServerBaseTests
             try
             {
                 await client.ConnectAsync(IPAddress.Loopback, port);
+                return;
+            }
+            catch (SocketException) when (accepted is { IsCompleted: true })
+            {
                 return;
             }
             catch (SocketException) when (DateTime.UtcNow < deadline)

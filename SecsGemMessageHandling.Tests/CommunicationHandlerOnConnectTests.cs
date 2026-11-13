@@ -118,7 +118,8 @@ public class CommunicationHandlerOnConnectTests
     /// Active side against a remote that accepts every connection and resets it at once: the Select.req from OnConnect
     /// fails. Before the fixes the connection lock either stayed taken (#4) or the client loop threw
     /// InvalidOperationException from GetStream() and the port was closed for good (#6). A late OnConnect of a
-    /// replaced connection (its loop reconnects by itself, #5) must not stall a restart until Dispose() times out (#51).
+    /// replaced connection (until #5 its loop reconnected by itself) must not stall a restart until Dispose() times
+    /// out (#51); since #5 this test no longer provokes that, see Late_OnConnect_after_the_restart_completed_is_ignored.
     /// </summary>
     [Fact]
     public async Task Remote_that_resets_every_connection_neither_hangs_nor_closes_the_port()

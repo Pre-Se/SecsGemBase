@@ -56,9 +56,10 @@ public class TCPIPServerBase : ITCPIPBase
     public event EventHandler? OnDisconnected;
 
     /// <summary>
-    /// Starts listening and accepts a client connection
+    /// Starts listening, accepts one client connection and receives until it ends
     /// </summary>
-    /// <returns>A task that represents the asynchronous listening operation</returns>
+    /// <returns>A task that completes when the connection has ended or this object has been disposed; then
+    /// <see cref="OnDisconnected"/> has been raised once</returns>
     public async Task Connect()
     {
         if (!await connectionSemaphore.WaitAsync(0))
