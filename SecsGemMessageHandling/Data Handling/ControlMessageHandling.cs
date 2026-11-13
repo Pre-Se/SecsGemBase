@@ -29,7 +29,12 @@ public partial class ControlMessageHandling : ObservableObject
         TransactionHandler = transactionHandler;
 
         CommunicationHandler.OnControlMessageIn.Subscribe(OnControlMessageIn);
-        CommunicationHandler.OnConnect += (_,_) => _ = HSMSStateChanging(HSMSStatus.NotSelected);
+        // Only while the connection is still Connected, checked under hsmsStatusSemaphore: CommunicationHandler raises
+        // OnConnect outside its connection lock, so a restart or ClosePort (and its OnDisconnect) can overtake it.
+        // Without the check a late OnConnect would leave NotSelected (T7 running, Select.req sent) on a connection
+        // that is already gone, and the next real connect would find NotSelected and send no Select.req.
+        CommunicationHandler.OnConnect += (_,_) => _ = HSMSStateChanging(HSMSStatus.NotSelected,
+            () => CommunicationHandler.ConnectionStatus == ConnectionStatus.Connected);
         CommunicationHandler.OnDisconnect += (_, _) => _ = HSMSStateChanging(HSMSStatus.NotConnected);
 
         Timer7 = new Timer(delegate
@@ -176,13 +181,15 @@ public partial class ControlMessageHandling : ObservableObject
         await CommunicationHandler.SendStateMessage(linktestResponse).ConfigureAwait(false);
     }
 
-    private async Task HSMSStateChanging(HSMSStatus newState)
+    private async Task HSMSStateChanging(HSMSStatus newState, Func<bool>? onlyIf = null)
     {
         await hsmsStatusSemaphore.WaitAsync(Cancellation).ConfigureAwait(false);
 
         try
         {
             if (HSMSStatus == newState || (int)newState > (int)HSMSStatus + 1)
+                return;
+            if (onlyIf is not null && !onlyIf())
                 return;
             
             HSMSStatus = newState;
