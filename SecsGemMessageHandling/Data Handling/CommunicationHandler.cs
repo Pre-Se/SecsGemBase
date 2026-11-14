@@ -1,5 +1,6 @@
 ﻿using System.ComponentModel;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Logging;
 using Logging.Enums;
@@ -121,6 +122,36 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
 
     /// <summary>The handler subscribed to the current connection's OnConnect, bound to that connection object.</summary>
     private EventHandler? connectionOnConnect;
+
+    /// <summary>The handler subscribed to the current connection's OnDisconnected, bound to its number.</summary>
+    private EventHandler? connectionOnDisconnected;
+
+    /// <summary>Number of the newest connection object; every <see cref="BuildConnectionBase"/> takes the next one.</summary>
+    private int connectionNumber;
+
+    /// <summary>The highest connection number whose connection has ended (OnDisconnected), 0 if none.</summary>
+    private int lostConnectionNumber;
+
+    /// <summary>
+    ///     The number of the connection each received data message arrived on, attached when it is parsed. A message of
+    ///     a replaced connection may still be parsed after the new one is up: the old object's OnDataReceived bus keeps
+    ///     delivering what it had received (GitLab secsgem/secsgembase#55).
+    /// </summary>
+    private readonly ConditionalWeakTable<ILoggedSecsGemMessage, StrongBox<int>> receivedOn = new();
+
+    /// <summary>
+    ///     The number of the current connection; it only grows. That is the newest connection object, or the next number
+    ///     once that connection has reported its end (OnDisconnected) and its restart has not built the next one yet.
+    /// </summary>
+    internal int ConnectionNumber =>
+        Math.Max(Volatile.Read(ref connectionNumber), Volatile.Read(ref lostConnectionNumber) + 1);
+
+    /// <summary>
+    ///     The number of the connection a received data message arrived on (see <see cref="ConnectionNumber"/>), 0 for a
+    ///     message this handler did not receive.
+    /// </summary>
+    internal int ConnectionNumberOf(ILoggedSecsGemMessage message) =>
+        receivedOn.TryGetValue(message, out var number) ? number.Value : 0;
 
 
     private CancellationTokenSource ConnectionCancellationTokenSource { get; set; } = new();
@@ -351,7 +382,7 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     {
         Volatile.Read(ref connectionDisposing).Cancel();
         TCPIPBase.OnConnect -= connectionOnConnect;
-        TCPIPBase.OnDisconnected -= RestartConnection;
+        TCPIPBase.OnDisconnected -= connectionOnDisconnected;
         TCPIPBase.Dispose();
     }
     /// <summary>
@@ -398,7 +429,7 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         return (rawBytes, header);
     }
 
-    private void ParseDataReceived(ReadOnlyMemory<byte> data)
+    private void ParseDataReceived(ReadOnlyMemory<byte> data, int connection)
     {
         var log = new LoggedSecsGemMessage(data, MessageResult.Received);
         OnRawMessageIn.Publish(log);
@@ -427,6 +458,7 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
                     {
                         Status = MessageStatus.Success
                     };
+                    receivedOn.AddOrUpdate(loggedDataMessage, new StrongBox<int>(connection));
                     messageBus.Publish(loggedDataMessage);
                     break;
                 case SessionType.SelectReq:
@@ -457,13 +489,22 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     private ITCPIPBase BuildConnectionBase()
     {
         var connection = CreateNewConnectionBase();
+        // Before TCPIPBase: ConnectionNumber is then never older than the connection a sender or receiver sees.
+        var number = Interlocked.Increment(ref connectionNumber);
         TCPIPBase = connection;
-        connection.OnDataReceived.Subscribe(ParseDataReceived);
+        connection.OnDataReceived.Subscribe(data => ParseDataReceived(data, number));
         // Bound to this object rather than taken from the event's sender: an ITCPIPBase decorator may pass on the
         // sender of the connection it wraps.
         connectionOnConnect = (_, _) => OnConnected(connection);
         connection.OnConnect += connectionOnConnect;
-        connection.OnDisconnected += RestartConnection;
+        connectionOnDisconnected = (sender, e) =>
+        {
+            // Before the restart is queued: a wait that starts after the loss is detected skips this connection's
+            // messages right away, not only once the restart has built the next connection (GitLab #55).
+            InterlockedMax(ref lostConnectionNumber, number);
+            RestartConnection(sender, e);
+        };
+        connection.OnDisconnected += connectionOnDisconnected;
         if (connection is TCPIPClientBase clientBase) clientBase.ConnectSeparationTimeout = (int)hsmsParameters.T5;
         // Last, after TCPIPBase: OnConnected reads the token first and the connection second (see there).
         Volatile.Write(ref connectionDisposing, new CancellationTokenSource());
@@ -508,6 +549,17 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
                 if (!cleared) Interlocked.Exchange(ref restartPending, 0);
             }
         });
+    }
+
+    private static void InterlockedMax(ref int location, int value)
+    {
+        var current = Volatile.Read(ref location);
+        while (current < value)
+        {
+            var seen = Interlocked.CompareExchange(ref location, value, current);
+            if (seen == current) return;
+            current = seen;
+        }
     }
 
     private void OnConnected(ITCPIPBase connection)

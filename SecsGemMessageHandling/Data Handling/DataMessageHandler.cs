@@ -334,6 +334,23 @@ public partial class DataMessageHandler : ObservableObject
         CommunicationsEstablished = false;
     }
 
+    /// <summary>
+    ///     Waits for a received data message that matches, including one received up to 5 s before the call. A message
+    ///     received just before the call can still be missed while it is not yet in the buffer (GitLab
+    ///     secsgem/secsgembase#52).
+    /// </summary>
+    /// <remarks>
+    ///     Only messages that arrived on the connection that is current when the call starts, or on a later one, count
+    ///     (GitLab secsgem/secsgembase#55). A connection stops being current when it reports its end or is replaced
+    ///     (restart, ClosePort). So a message from before a lost connection, still in the 5-s buffer or parsed late, does
+    ///     not satisfy a wait that starts after the loss was detected, even if it is the reply to an earlier request of
+    ///     the caller: HSMS ends open transactions with the connection. A send that fails on the lost connection may be
+    ///     reported a moment before the connection reports its end; a wait started in that moment still counts the
+    ///     connection as current. A wait that is already running when the connection is replaced keeps receiving
+    ///     messages of the new connection.
+    /// </remarks>
+    /// <param name="accept">Called last for a message that matches; false skips it (e.g. already consumed).</param>
+    /// <returns>The message, or null after <paramref name="timeout"/> or cancellation.</returns>
     public async Task<ILoggedDataMessage?> WaitForReceivedMessage(
         Func<SecsGemDataMessage, bool> predicate, TimeSpan timeout, CancellationToken cancellation = default,
         Func<ILoggedDataMessage, bool>? accept = null)
@@ -344,7 +361,10 @@ public partial class DataMessageHandler : ObservableObject
 
         using var reg = linkedCts.Token.Register(() => tcs.TrySetResult(null));
 
-        bool Matches(ILoggedDataMessage msg) => predicate(msg.Data) && (accept?.Invoke(msg) ?? true);
+        var connection = communicationHandler.ConnectionNumber;
+        bool Matches(ILoggedDataMessage msg) =>
+            communicationHandler.ConnectionNumberOf(msg) >= connection &&
+            predicate(msg.Data) && (accept?.Invoke(msg) ?? true);
 
         IDisposable? subscription = null;
         subscription = communicationHandler.OnDataMessageIn.Subscribe(msg =>
