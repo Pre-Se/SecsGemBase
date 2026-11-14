@@ -59,15 +59,33 @@ public class TransactionHandler
 
         ReplyExpectedMessages[systemBytes] = (message.Name, token);
 
-        var loggedMessage = await CommunicationHandler.SendAndLogMessage(message, systemBytes);
-
+        // The send inside the outer try: if it throws, the finally still removes the entry. The catches only cover the
+        // wait for the reply, so an exception from sending still reaches the caller.
         try
         {
+            var loggedMessage = await CommunicationHandler.SendAndLogMessage(message, systemBytes);
+
             if (loggedMessage.Status is not MessageStatus.Success)
                 return (TransactionHandlerError.MessageNotSent, null);
 
-            var reply = await token.Task.WaitAsync(TimeSpan.FromMilliseconds(HsmsParameters.T3), Cancellation.Token)
-                .ConfigureAwait(false);
+            ILoggedSecsGemMessage reply;
+            try
+            {
+                reply = await token.Task.WaitAsync(TimeSpan.FromMilliseconds(HsmsParameters.T3), Cancellation.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (TaskCanceledException)
+            {
+                Logger.LogWarning("Await reply for {message} ({systemBytes}) was cancelled", message.Name, systemBytes);
+                return (TransactionHandlerError.Cancelled, null);
+            }
+            catch (TimeoutException)
+            {
+                Logger.LogError(
+                    "T3 Timeout for message [message ID: 0x{systemBytes:X8}] : Currently set at {timeout} ms.", systemBytes, HsmsParameters.T3);
+                CommunicationHandler.RestartConnection();
+                return (TransactionHandlerError.Timeout, null);
+            }
 
             if (reply is ILoggedDataMessage dataReply)
             {
@@ -75,18 +93,6 @@ public class TransactionHandler
             }
 
             return (TransactionHandlerError.IncorrectMessageReplyType, null);
-        }
-        catch (TaskCanceledException)
-        {
-            Logger.LogWarning("Await reply for {message} ({systemBytes}) was cancelled", message.Name, systemBytes);
-            return (TransactionHandlerError.Cancelled, null);
-        }
-        catch (TimeoutException)
-        {
-            Logger.LogError(
-                "T3 Timeout for message [message ID: 0x{systemBytes:X8}] : Currently set at {timeout} ms.", systemBytes, HsmsParameters.T3);
-            CommunicationHandler.RestartConnection();
-            return (TransactionHandlerError.Timeout, null);
         }
         finally
         {
@@ -106,7 +112,14 @@ public class TransactionHandler
             return;
         }
 
-        transaction.completeSource.SetResult(reply);
+        // Try: the transaction may already be completed (a second reply with the same system bytes before
+        // SendTransaction removed the entry) or cancelled (RemoveAllTransactions after a lost connection). SetResult
+        // would throw on the event bus and end the process (GitLab secsgem/secsgembase#12).
+        if (!transaction.completeSource.TrySetResult(reply))
+        {
+            Logger.LogWarning("Reply {Name} for message ID 0x{SystemBytes:X8} ignored: transaction already completed",
+                reply.Data.Name, reply.HeaderData.SystemBytes);
+        }
     }
 
     public async Task<(TransactionHandlerError error, ILoggedControlMessage? reply)> SendControlTransaction(HeaderData transaction)

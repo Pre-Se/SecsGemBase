@@ -121,13 +121,36 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
     /// Sends data to the server
     /// </summary>
     /// <param name="data"></param>
+    /// <remarks>
+    /// Once <see cref="Dispose()"/> has started it throws <see cref="OperationCanceledException"/>, also for a write that
+    /// Dispose() interrupts.
+    /// </remarks>
     public async Task<bool> SendData(ReadOnlyMemory<byte> data)
     {
-        var client = Volatile.Read(ref activeTcpClient);
-        if (client is null or { Connected: false }) return false;
-        var networkStream = client.GetStream();
-        await networkStream.WriteAsync(data, ConnectionCancellationTokenSource.Token).ConfigureAwait(false);
-        return true;
+        ThrowIfDisposing();
+        try
+        {
+            var client = Volatile.Read(ref activeTcpClient);
+            if (client is null or { Connected: false })
+            {
+                ThrowIfDisposing();
+                return false;
+            }
+
+            var networkStream = client.GetStream();
+            await networkStream.WriteAsync(data, ConnectionCancellationTokenSource.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception e) when (e is not OperationCanceledException && Volatile.Read(ref isDisposed) == 1)
+        {
+            // Dispose() ended the connection or disposed the token source while this write ran.
+            throw new OperationCanceledException("The connection is being disposed", e);
+        }
+    }
+
+    private void ThrowIfDisposing()
+    {
+        if (Volatile.Read(ref isDisposed) == 1) throw new OperationCanceledException("The connection is being disposed");
     }
 
     /// <summary>
