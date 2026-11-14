@@ -184,7 +184,11 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         }
     }
 
-    public void RestartConnection()
+    public void RestartConnection() => RestartConnection(afterDispose: null);
+
+    /// <param name="afterDispose">Runs under the lock once the old connection is disposed and unsubscribed, before
+    /// the new one is built.</param>
+    private void RestartConnection(Action? afterDispose)
     {
         connectionStatusSemaphore.Wait();
         try
@@ -192,6 +196,7 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
             if (ConnectionStatus is ConnectionStatus.Connected)
                 logger.LogInformation("Communication will be restarted");
             DisposeConnection();
+            afterDispose?.Invoke();
             BuildConnectionBase();
             if (ConnectionOn)
             {
@@ -447,29 +452,42 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     }
 
     /// <summary>
-    ///     Restarts the connection on the thread pool. Requests that arrive while a restart is pending are dropped.
-    ///     Used for OnDisconnected and failed sends, which may come from a connection's own loop or from a thread
-    ///     that holds <see cref="connectionStatusSemaphore"/>.
+    ///     Restarts the connection on the thread pool. Used for OnDisconnected, failed sends and network settings
+    ///     changes, which may come from a connection's own loop or from a thread that holds
+    ///     <see cref="connectionStatusSemaphore"/>. Requests that arrive while a restart is pending, up to the moment
+    ///     it has disposed the old connection, are covered by that restart and dropped (the loss of a connection
+    ///     often brings OnDisconnected and failed sends together; NetworkSettings.CopyFrom raises three
+    ///     PropertyChanged). Requests after that queue a new restart: right for OnDisconnected of the new connection and
+    ///     for newer settings, but also for a failed send on the old connection that arrives late, because requests are
+    ///     not yet bound to their connection (GitLab secsgem/secsgembase#32).
     /// </summary>
     private void RestartConnection(object? sender, EventArgs e)
     {
-        if (Interlocked.CompareExchange(ref restartPending, 1, 0) == 0)
-            Task.Run(() =>
+        if (Interlocked.CompareExchange(ref restartPending, 1, 0) != 0) return;
+        Task.Run(() =>
+        {
+            var cleared = false;
+            try
             {
-                try
+                // Cleared under the lock, right after the old connection is gone and before the new one exists.
+                // Clearing only after RestartConnection() returned dropped an OnDisconnected of the new connection
+                // that came in between, and nothing reconnected (TCPIPClientBase no longer reconnects by itself).
+                RestartConnection(afterDispose: () =>
                 {
-                    RestartConnection();
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError("Restarting the connection failed: {Error}", ex.Message);
-                }
-                finally
-                {
-                    // Reset even if the restart threw, or no automatic restart would ever run again.
                     Interlocked.Exchange(ref restartPending, 0);
-                }
-            });
+                    cleared = true;
+                });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError("Restarting the connection failed: {Error}", ex.Message);
+            }
+            finally
+            {
+                // A restart that threw before disposing must not block every later restart.
+                if (!cleared) Interlocked.Exchange(ref restartPending, 0);
+            }
+        });
     }
 
     private void OnConnected(ITCPIPBase connection)

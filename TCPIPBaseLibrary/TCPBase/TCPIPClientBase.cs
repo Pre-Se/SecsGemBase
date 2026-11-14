@@ -33,9 +33,19 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
     public event EventHandler? OnDisconnected;
 
     /// <summary>
-    /// Connects to the server
+    /// Connects to the server and receives data until the connection ends
     /// </summary>
-    /// <returns>A task that represents the asynchronous connecting operation</returns>
+    /// <remarks>
+    /// Failed connection attempts are retried every <see cref="ConnectSeparationTimeout"/> milliseconds until
+    /// <see cref="Dispose()"/>. A connection that has been established and is then lost is not re-established here:
+    /// the returned task completes and <see cref="OnDisconnected"/> is raised once, as it is after
+    /// <see cref="Dispose()"/>. The owner decides whether to connect again, by calling <see cref="Connect"/> again or,
+    /// like CommunicationHandler, with a new object. <see cref="OnDisconnected"/> is raised before the task completes,
+    /// also when it faults because an <see cref="OnConnect"/> handler threw. A call while another one is running
+    /// returns at once with a warning and raises nothing; after <see cref="Dispose()"/> it throws
+    /// <see cref="ObjectDisposedException"/>.
+    /// </remarks>
+    /// <returns>A task that completes when the connection has ended or this object has been disposed</returns>
     public async Task Connect()
     {
         if (!await connectionSemaphore.WaitAsync(0))
@@ -83,20 +93,27 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
             catch (Exception e) when (e is SocketException or IOException)
             {
                 Logger.LogWarning("{error}", e.Message);
-                Logger.LogInformation("Waiting {timeout} milliseconds to try again", ConnectSeparationTimeout);
-                try { await Task.Delay(ConnectSeparationTimeout, cancellationToken); }
-                catch (OperationCanceledException)
+                if (!wasConnected)
                 {
-                    Logger.LogInformation("Connection was stopped");
-                    break;
+                    Logger.LogInformation("Waiting {timeout} milliseconds to try again", ConnectSeparationTimeout);
+                    try { await Task.Delay(ConnectSeparationTimeout, cancellationToken); }
+                    catch (OperationCanceledException)
+                    {
+                        Logger.LogInformation("Connection was stopped");
+                        break;
+                    }
                 }
             }
             finally
             {
                 Volatile.Write(ref activeTcpClient, null);
-                if (wasConnected && !cancellationToken.IsCancellationRequested)
-                    OnDisconnected?.Invoke(this, EventArgs.Empty);
             }
+
+            // Only failed connect attempts are retried here. A lost connection ends the loop: Connect() then raises
+            // OnDisconnected once, and the owner decides whether to connect again. CommunicationHandler restarts with
+            // a new object; reconnecting here as well raced that restart and could put a second connection on the
+            // remote side (GitLab secsgem/secsgembase#5).
+            if (wasConnected) break;
         }
     }
 

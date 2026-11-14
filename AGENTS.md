@@ -58,10 +58,10 @@ The ReSharper settings register these as single-word abbreviations: `HSMS`, `TCP
 
 Two mechanisms must be kept in sync:
 
-- `connectionStatusSemaphore` (SemaphoreSlim(1,1)) serializes `OpenPort`/`ClosePort`/`RestartConnection`
-- `restartPending` (int, Interlocked) coalesces rapid successive `PropertyChanged`-triggered restarts into one background task
+- `connectionStatusSemaphore` (SemaphoreSlim(1,1)) serializes `OpenPort`/`ClosePort`/`ClosePortIfCurrent`/`RestartConnection` and the status update in `OnConnected`; `Dispose()` does not take it
+- `restartPending` (int, Interlocked) coalesces queued restarts (`PropertyChanged` of the network settings, `OnDisconnected`, failed sends) into one background task
 
-`restartPending` exists because `NetworkSettings.CopyFrom()` sets three properties synchronously, firing three `PropertyChanged` events in quick succession. Without the flag, three `RestartConnection()` calls would be queued; the second/third would dispose `TCPIPBase` while the first's `ConnectLoopAsync` was still using it. The flag is set before the task starts and cleared after `RestartConnection()` completes — not before — so changes arriving mid-restart are also coalesced.
+`restartPending` exists because `NetworkSettings.CopyFrom()` sets three properties synchronously, firing three `PropertyChanged` events in quick succession, and because a lost connection often brings `OnDisconnected` and failed sends together. Without the flag, several `RestartConnection()` calls would be queued and each would replace the connection again. The flag is set before the task starts and cleared under the lock right after the old connection has been disposed, before the new one is built: requests up to that point are covered by this restart, later ones queue a new restart. That is right for `OnDisconnected` of the new connection and for settings changes (the new connection is built after the reset). A failed send that concerns the old connection but reaches the flag only after the reset restarts the new one as well, because restart requests are not yet bound to their connection (GitLab ticket 32). Clearing it only after `RestartConnection()` returned dropped an `OnDisconnected` of the new connection, and since `TCPIPClientBase` no longer reconnects by itself (GitLab ticket 5), nothing would reconnect.
 
 ## Settings-Driven Reconnection
 
