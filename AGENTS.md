@@ -73,6 +73,10 @@ Two mechanisms must be kept in sync:
 
 `TransactionHandler.TryHandleDataMessageReply` completes a transaction with `TrySetResult` (GitLab ticket 12). It runs as a `Subscribe(Action)` handler on the event bus, where an exception ends the process. A second reply with the same system bytes, or a reply racing `RemoveAllTransactions` after a lost connection, is ignored: with a warning if the entry is still there, silently like any unmatched reply once `SendTransaction` or `RemoveAllTransactions` has removed it.
 
+## Received Messages and Connections
+
+`DataMessageHandler.WaitForReceivedMessage` (the scenario engine's Receive node) also looks 5 s back into a buffer, but only accepts messages received on the connection that is current when the wait starts, or a later one (GitLab ticket 55). `CommunicationHandler` numbers its connection objects in `BuildConnectionBase` and attaches the number to each received data message when it is parsed (`ConnectionNumberOf`, internal, a `ConditionalWeakTable`): the `OnDataReceived` bus of a replaced object may still deliver after the reconnect (ticket 7). A connection stops being current as soon as it raises `OnDisconnected` (bound per connection), not only when the queued restart has built the next one.
+
 ## Settings-Driven Reconnection
 
 `CommunicationHandler` subscribes to:
