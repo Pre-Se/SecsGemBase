@@ -93,43 +93,46 @@ public class SecsGemEventReportHandler
             return false;
         }
 
-        List<SecsGemItem> statusVariables;
-
-        if (variableList is { Children.Count: 0 })
-        {
-            statusVariables = GetAllStatusVariables();
-        }
-        else
-        {
-            if (!GetRequestedStatusVariables(variableList, out statusVariables));
-        }
+        var statusVariables = variableList is { Children.Count: 0 }
+            ? GetAllStatusVariables()
+            : GetRequestedStatusVariables(variableList);
 
         await SendS1F04Message(statusVariables, replyBytes);
         return true;
     }
 
-    private bool GetRequestedStatusVariables(SecsGemItem variableList, out List<SecsGemItem> statusVariables)
+    /// <summary>
+    /// One S1F4 entry per requested SVID, in the order of the request, also for an SVID requested twice. An SVID that is
+    /// not a single I4 value is answered like an unknown one, with a list of length 0 at its position, so the host can
+    /// still match the values to its SVIDs (GitLab secsgem/secsgembase#43; until then the answer stopped at the first
+    /// invalid SVID).
+    /// </summary>
+    private List<SecsGemItem> GetRequestedStatusVariables(SecsGemItem variableList)
     {
-        statusVariables = [];
+        List<SecsGemItem> statusVariables = [];
+        List<int> invalidPositions = [];
 
         foreach (var statusVariableId in variableList.Children.Cast<SecsGemItem>())
         {
-            if (statusVariableId is not { FormatType: SecsGemItemFormatType.I4 })
+            if (statusVariableId is { FormatType: SecsGemItemFormatType.I4 } &&
+                statusVariableId.GetBoxedValues().Take(2).Count() == 1 &&
+                statusVariableId.TryGetValue<int>(out var svid))
             {
-                logger.LogError("Invalid status variable id format, format should be I4");
-                return false;
+                statusVariables.Add(GetStatusVariable(svid));
+                continue;
             }
 
-            if (!statusVariableId.TryGetValue<int>(out var svid))
-            {
-                logger.LogError("Error parsing status variable id");
-                return false;
-            }
-
-            statusVariables.Add(GetStatusVariable(svid));
+            invalidPositions.Add(statusVariables.Count);
+            var invalidVariable = SecsGemItem.Create(SecsGemItemFormatType.List);
+            invalidVariable.Description = "Invalid status variable id";
+            statusVariables.Add(invalidVariable);
         }
 
-        return true;
+        if (invalidPositions.Count > 0)
+            logger.LogError("S1F3: status variable id(s) at position(s) {Positions} are not a single I4 value, " +
+                            "answered with an empty list", string.Join(", ", invalidPositions));
+
+        return statusVariables;
     }
 
     private async Task SendS1F04Message(IEnumerable<SecsGemItem> statusVariablesValues, uint replyBytes)
@@ -493,19 +496,24 @@ public class SecsGemEventReportHandler
         {
             if (variable.VariableClass is SecsGemVariableClass.StatusVariable)
             {
-                statusVariables.Add(variable.Item);
+                statusVariables.Add(variable.Item.Clone());
             }
         }
 
         return statusVariables;
     }
 
+    /// <remarks>
+    /// Returns a copy: the S1F4 list takes its entries as children (SetParent). With the registry's own item, an SVID
+    /// requested twice moved that item to the end instead of appearing twice, and each answer took it out of the
+    /// previous message (GitLab secsgem/secsgembase#43).
+    /// </remarks>
     private SecsGemItem GetStatusVariable(int statusVariableId)
     {
         if (variableRegistry.TryGet(statusVariableId, out var variable) &&
             variable is { VariableClass: SecsGemVariableClass.StatusVariable })
         {
-            return variable.Item;
+            return variable.Item.Clone();
         }
         else
         {
