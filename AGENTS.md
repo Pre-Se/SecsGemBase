@@ -49,7 +49,10 @@ Build-time only (never appear in the produced packages): `Nerdbank.GitVersioning
 
 ## CI
 
-No CI pipeline is configured in this repo. Packages are published manually: `dotnet pack SecsGemBase.sln -c Release` then push the `.nupkg`/`.snupkg` files to nuget.org.
+- `.github/workflows/ci.yml`: on push to `development` or `main`, on every pull request and by hand. Restore, Release build and `dotnet test` of the solution on Ubuntu and Windows (the TCP tests behave differently on Windows, e.g. resets and rebinding the passive port).
+- `.github/workflows/publish.yml` ("Publish to NuGet"): on a `v*` tag or by hand ("Run workflow"). The job runs only for `development` or a `v*` tag; that guard only prevents accidental runs, because the `release` environment has no protection rules (deployment branches, reviewers) yet. Build, test, pack and push all six `SecsGemBase.*` packages to nuget.org with trusted publishing (`NuGet/login`, environment `release`). The version comes from `version.json` and the commit height (`1.0.0-build-<height>-g<commit>`), not from the tag. A published version cannot be deleted, only unlisted. The actions are pinned to commits because the job can obtain a NuGet API key. When `development` is retired (GitLab ticket 35), change the branch in the guard.
+- Check workflow edits with `actionlint` before pushing: GitHub silently starts no job for an invalid file.
+- `global.json` limits the SDK to 10.0 (the highest installed 10.0 feature band): the runners also have a newer SDK preinstalled, which would otherwise build with a different compiler (`LangVersion` is `preview`). The workflows install `10.0.x` (GitLab ticket 45).
 
 ## Domain Vocabulary (Naming)
 
