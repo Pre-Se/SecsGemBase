@@ -26,5 +26,12 @@ public interface ITCPIPBase : IDisposable
     /// unlike for the other failures, requests no restart: whoever disposes the object is already replacing or closing
     /// the connection.</exception>
     Task<bool> SendData(ReadOnlyMemory<byte> data);
+
+    /// <summary>
+    /// Ends the connection with a TCP reset (RST) instead of closing it in order (FIN), then disposes this object like
+    /// Dispose(). The remote side's next read fails with "connection reset", as after a hard connection loss. The
+    /// default only calls Dispose(): an implementation without its own Abort(), e.g. a decorator, closes in order.
+    /// </summary>
+    void Abort() => Dispose();
     public IEventBus<ReadOnlyMemory<byte>> OnDataReceived { get; }
 }

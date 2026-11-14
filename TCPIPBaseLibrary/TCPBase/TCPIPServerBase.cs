@@ -22,6 +22,9 @@ public class TCPIPServerBase : ITCPIPBase
     /// </summary>
     private int isDisposed;
 
+    /// <summary>1 once <see cref="Abort"/> was called: Dispose then closes the connection with a reset.</summary>
+    private int aborting;
+
     /// <summary>
     /// The IP address that the server is listening to, if empty it listens to any IP address
     /// </summary>
@@ -168,6 +171,19 @@ public class TCPIPServerBase : ITCPIPBase
 
 
     /// <summary>
+    /// Ends the connection with a TCP reset (RST) instead of the orderly close of <see cref="Dispose()"/>, then disposes
+    /// this object like Dispose(). Without a connected client it only disposes.
+    /// </summary>
+    public void Abort()
+    {
+        // Not after Dispose(): that closed in order already, even if its loop is still finishing (Dispose() does not
+        // wait for a loop that has not stored its task yet).
+        if (Volatile.Read(ref isDisposed) == 1) return;
+        Volatile.Write(ref aborting, 1);
+        Dispose();
+    }
+
+    /// <summary>
     /// Disconnects from the client
     /// </summary>
     public void Dispose()
@@ -205,6 +221,8 @@ public class TCPIPServerBase : ITCPIPBase
         TcpListener.Dispose();
         if (ConnectedClient != null)
         {
+            if (Volatile.Read(ref aborting) == 1 && TCPIPExtensions.Reset(ConnectedClient))
+                Logger.LogInformation("Connection reset (TCP RST)");
             ConnectedClient.Close();
             ConnectedClient.Dispose();
         }

@@ -6,6 +6,27 @@ using TCPIPBaseLibrary.Interfaces;
 namespace TCPIPBaseLibrary.TCPBase;
 internal static class TCPIPExtensions
 {
+    /// <summary>
+    /// Closes the client's socket with a TCP reset (RST): linger 0 and no shutdown. Disposing the TcpClient alone always
+    /// sends FIN first, also with LingerState set, because disposing its NetworkStream shuts the socket down
+    /// (GitLab secsgem/secsgembase#53). Call it before the TcpClient is disposed.
+    /// </summary>
+    /// <returns>Whether the socket was still connected (for the log only: the reset is attempted either way).</returns>
+    internal static bool Reset(TcpClient client)
+    {
+        try
+        {
+            if (client.Client is not { } socket) return false;
+            var connected = socket.Connected;
+            socket.Close(0);
+            return connected;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
     internal static async Task ReceiveDataLoopAsync(this ITCPIPBase tcpipBase, NetworkStream networkStream,
         ILogger<ITCPIPBase> logger, CancellationToken cancellation)
     {

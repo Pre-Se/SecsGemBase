@@ -22,6 +22,9 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
 
     public IEventBus<ReadOnlyMemory<byte>> OnDataReceived { get; } = eventBusFactory.CreateTransient<ReadOnlyMemory<byte>>();
     private TcpClient? activeTcpClient;
+
+    /// <summary>1 once <see cref="Abort"/> was called: the loop then closes its connection with a reset.</summary>
+    private int aborting;
     private string IpAddress { get; } = networkSettings.IpAddress;
     private int Port { get; } = networkSettings.Port;
     private CancellationTokenSource ConnectionCancellationTokenSource { get; } = new();
@@ -107,6 +110,9 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
             finally
             {
                 Volatile.Write(ref activeTcpClient, null);
+                // Here, before the using disposes the client (which would send FIN), also when Abort() came in while
+                // the connect was still completing.
+                if (Volatile.Read(ref aborting) == 1) ResetConnection(tcpClient);
             }
 
             // Only failed connect attempts are retried here. A lost connection ends the loop: Connect() then raises
@@ -154,6 +160,19 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
     }
 
     /// <summary>
+    /// Ends the connection with a TCP reset (RST) instead of the orderly close of <see cref="Dispose()"/>, then disposes
+    /// this object like Dispose(). Without an established connection it only disposes.
+    /// </summary>
+    public void Abort()
+    {
+        // Not after Dispose(): that closed in order already, even if its loop is still finishing (Dispose() does not
+        // wait for a loop that has not stored its task yet).
+        if (Volatile.Read(ref isDisposed) == 1) return;
+        Volatile.Write(ref aborting, 1);
+        Dispose();
+    }
+
+    /// <summary>
     /// Disconnects from the server
     /// </summary>
     public void Dispose()
@@ -188,7 +207,16 @@ public class TCPIPClientBase(INetworkSettings networkSettings, ILogger<TCPIPClie
             }
         }
 
+        // Also here, not only in the loop: Dispose() may have stopped waiting for the loop (5 s) or not waited at all
+        // (task not stored yet), and Abort() should have reset the connection when it returns, as on the server.
+        if (Volatile.Read(ref aborting) == 1 && Volatile.Read(ref activeTcpClient) is { } client) ResetConnection(client);
+
         ConnectionCancellationTokenSource.Dispose();
         connectionSemaphore.Dispose();
+    }
+
+    private void ResetConnection(TcpClient client)
+    {
+        if (TCPIPExtensions.Reset(client)) Logger.LogInformation("Connection reset (TCP RST)");
     }
 }
