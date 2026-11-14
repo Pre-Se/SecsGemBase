@@ -15,6 +15,16 @@ public interface ITCPIPBase : IDisposable
     /// and then completes. Reconnecting is up to the owner (CommunicationHandler creates a new object).
     /// </summary>
     Task Connect();
+
+    /// <summary>Writes one HSMS frame to the current connection.</summary>
+    /// <returns>false if there is no connection to write to.</returns>
+    /// <exception cref="IOException">Writing failed, e.g. the remote side has reset the connection; also
+    /// <see cref="System.Net.Sockets.SocketException"/>, <see cref="InvalidOperationException"/> or
+    /// <see cref="ObjectDisposedException"/> when the connection has just ended.</exception>
+    /// <exception cref="OperationCanceledException">Dispose() of this object has started, also for a write that it
+    /// interrupts; TCPIPClientBase and TCPIPServerBase do this. CommunicationHandler reports the message as failed and,
+    /// unlike for the other failures, requests no restart: whoever disposes the object is already replacing or closing
+    /// the connection.</exception>
     Task<bool> SendData(ReadOnlyMemory<byte> data);
     public IEventBus<ReadOnlyMemory<byte>> OnDataReceived { get; }
 }

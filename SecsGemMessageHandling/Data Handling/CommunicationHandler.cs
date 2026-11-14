@@ -214,6 +214,14 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
             connectionStatusSemaphore.Release();
         }
     }
+    /// <summary>
+    ///     Sends a data message and, if it was written, publishes it on <see cref="OnDataMessageOut"/>.
+    /// </summary>
+    /// <returns>
+    ///     The log entry. Its status is <see cref="MessageStatus.Failure"/> if the message could not be written; write
+    ///     errors are not thrown. A failure queues a restart of the connection unless the connection was already being
+    ///     closed.
+    /// </returns>
     public async Task<ILoggedDataMessage> SendAndLogMessage(SecsGemDataMessage message, uint systemBytes)
     {
         var (status, rawData, header) = await SendDataMessage(message, systemBytes).ConfigureAwait(false);
@@ -228,6 +236,10 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
 
         return log;
     }
+    /// <summary>
+    ///     Sends a control message and, if it was written, publishes it on <see cref="OnControlMessageOut"/>.
+    /// </summary>
+    /// <returns>The log entry; for failures see <see cref="SendAndLogMessage"/>.</returns>
     public async Task<ILoggedControlMessage> SendStateMessage(HeaderData data)
     {
         var message = data.ToBytes();
@@ -245,11 +257,16 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
                 status = MessageStatus.Failure;
             }
         }
+        catch (OperationCanceledException)
+        {
+            // The connection is being disposed: no further restart, see SendDataMessage.
+            logger.LogWarning("{Type} not sent, the connection is being closed", SessionTypeName(data));
+            return new LoggedControlMessage(data, message, MessageResult.Sent) { Status = MessageStatus.Failure };
+        }
         catch (Exception e) when (e is SocketException or IOException or InvalidOperationException)
         {
-            if (!SecsGemSessionType.TryGetSessionType(data.SessionType, out var messageType))
-                messageType = "unknown message type";
-            logger.LogError("Error sending {Type} : {Message}, remote entity was no longer connected", messageType, e.Message);
+            logger.LogError("Error sending {Type} : {Message}, remote entity was no longer connected",
+                SessionTypeName(data), e.Message);
             status = MessageStatus.Failure;
         }
         
@@ -272,6 +289,10 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
 
         return log;
     }
+
+    private static string SessionTypeName(HeaderData data) =>
+        SecsGemSessionType.TryGetSessionType(data.SessionType, out var name) ? name! : "unknown message type";
+
     /// <summary>
     ///     Sends data to the remote device
     /// </summary>
@@ -340,30 +361,29 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     {
         var (rawData, header) = await Task.Run(() => BuildMessageData(message, systemBytes)).ConfigureAwait(false);
 
-        var status = MessageStatus.Pending;
+        // Every write error is a failure, as in SendStateMessage. Until GitLab secsgem/secsgembase#14 an IOException
+        // was reported as Success, and other exceptions reached the caller.
         try
         {
             if (await SendDataAsync(rawData).ConfigureAwait(false))
-            {
-                status = MessageStatus.Success;
-            }
-            else
-            {
-                status = MessageStatus.Failure;
-                logger.LogError("Error sending {Message}", message.Name);
-            }
+                return (MessageStatus.Success, rawData, header);
+
+            logger.LogError("Error sending {Message}", message.Name);
         }
-        catch (Exception e) when (e is SocketException or IOException)
+        catch (OperationCanceledException)
+        {
+            // The connection is being disposed: a restart or ClosePort is already replacing it (see ITCPIPBase.SendData).
+            logger.LogWarning("{Message} not sent, the connection is being closed", message.Name);
+            return (MessageStatus.Failure, rawData, header);
+        }
+        catch (Exception e) when (e is SocketException or IOException or InvalidOperationException)
         {
             logger.LogError("Error sending {Message} : {Error}", message.Name, e.Message);
         }
 
-        if (status != MessageStatus.Failure) return (MessageStatus.Success, rawData, header);
-
         // Queued, not inline, like in SendStateMessage.
         RestartConnection(this, EventArgs.Empty);
         return (MessageStatus.Failure, rawData, header);
-
     }
 
     public (byte[] rawData, HeaderData header) BuildMessageData(SecsGemDataMessage message, uint systemBytes)
