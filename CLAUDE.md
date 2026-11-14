@@ -20,9 +20,12 @@ dotnet build SecsGemBase.sln --configuration Release
 
 # Pack NuGet packages
 dotnet pack SecsGemBase.sln -c Release
+
+# Run all tests
+dotnet test SecsGemBase.sln -c Release
 ```
 
-There are no test projects in this solution. A successful `dotnet build` is the only verification step.
+The xUnit test projects (`*.Tests`, `IsPackable=false`) cover items, the TCP layer, message handling and the scenario engine, many with real loopback sockets.
 
 ## Shared Build Settings
 

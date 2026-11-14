@@ -11,6 +11,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The scenario node DropConnection uses CommunicationHandler.TryDropConnection/ReopenPortAfterDrop (internal):
+         release SecsGemBase.MessageHandling and SecsGemBase.ScenarioEngine together, in the same version. -->
+    <InternalsVisibleTo Include="SecsGemScenarioEngine" />
+    <InternalsVisibleTo Include="SecsGemMessageHandling.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Logging\Logging.csproj" />
     <ProjectReference Include="..\SecsGemBaseItems\SecsGemBaseItems.csproj" />
     <ProjectReference Include="..\SecsGemHelperClasses\SecsGemHelperClasses.csproj" />

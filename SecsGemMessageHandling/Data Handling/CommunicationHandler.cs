@@ -37,9 +37,17 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         private set
         {
             field = value;
+            // Always set under connectionStatusSemaphore. Counted for ReopenPortAfterDrop: whether anybody opened or
+            // closed the port since DropConnection closed it.
+            portChanges++;
             ConnectionStatus = value ? ConnectionStatus.PortOpen : ConnectionStatus.PortClosed;
         }
     }
+
+    /// <summary>How often <see cref="ConnectionOn"/> was set; changed and read under connectionStatusSemaphore.</summary>
+    private int portChanges;
+
+    private volatile bool disposed;
 
     /// <summary>
     ///     Gets the current connection status of the underlying TCPIP connection/>
@@ -158,6 +166,7 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        disposed = true;
         DisposeConnection();
         messageBus.Dispose();
         ConnectionCancellationTokenSource.Cancel();
@@ -189,15 +198,21 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         connectionStatusSemaphore.Wait();
         try
         {
-            ConnectionOn = true;
-            var connection = TCPIPBase;
-            Task.Run(() => ConnectLoopAsync(connection));
+            OpenPortLocked();
         }
         finally
         {
             connectionStatusSemaphore.Release();
         }
     }
+
+    private void OpenPortLocked()
+    {
+        ConnectionOn = true;
+        var connection = TCPIPBase;
+        Task.Run(() => ConnectLoopAsync(connection));
+    }
+
     /// <summary>
     ///     Closes the connection in order and the port.
     /// </summary>
@@ -215,16 +230,21 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         connectionStatusSemaphore.Wait();
         try
         {
-            DisposeConnection(abort);
-            BuildConnectionBase();
-            // Status last, like RestartConnection: OnDisconnect then follows the OnConnect handlers that the old
-            // connection's loop may still be running (Dispose waited for that loop).
-            ConnectionOn = false;
+            ClosePortLocked(abort);
         }
         finally
         {
             connectionStatusSemaphore.Release();
         }
+    }
+
+    private void ClosePortLocked(bool abort)
+    {
+        DisposeConnection(abort);
+        BuildConnectionBase();
+        // Status last, like RestartConnection: OnDisconnect then follows the OnConnect handlers that the old
+        // connection's loop may still be running (Dispose waited for that loop).
+        ConnectionOn = false;
     }
 
     /// <summary>
@@ -249,27 +269,100 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         connectionStatusSemaphore.Wait();
         try
         {
-            if (ConnectionStatus is ConnectionStatus.Connected)
-                logger.LogInformation("Communication will be restarted");
-            DisposeConnection(abort);
-            afterDispose?.Invoke();
-            BuildConnectionBase();
-            if (ConnectionOn)
-            {
-                ConnectionStatus = ConnectionStatus.PortOpen;
-                var connection = TCPIPBase;
-                Task.Run(() => ConnectLoopAsync(connection));
-            }
-            else
-            {
-                ConnectionStatus = ConnectionStatus.PortClosed;
-            }
+            RestartConnectionLocked(abort, afterDispose);
         }
         finally
         {
             connectionStatusSemaphore.Release();
         }
     }
+
+    private void RestartConnectionLocked(bool abort, Action? afterDispose)
+    {
+        if (ConnectionStatus is ConnectionStatus.Connected)
+            logger.LogInformation("Communication will be restarted");
+        DisposeConnection(abort);
+        afterDispose?.Invoke();
+        BuildConnectionBase();
+        if (ConnectionOn)
+        {
+            ConnectionStatus = ConnectionStatus.PortOpen;
+            var connection = TCPIPBase;
+            Task.Run(() => ConnectLoopAsync(connection));
+        }
+        else
+        {
+            ConnectionStatus = ConnectionStatus.PortClosed;
+        }
+    }
+
+    /// <summary>
+    ///     Simulates a connection loss for the scenario node DropConnection (SecsGemScenarioEngine): aborts the
+    ///     established connection with a TCP reset, see <see cref="ClosePort(bool)"/> and
+    ///     <see cref="RestartConnection(bool)"/>. Checks and aborts under the connection lock, so a connection that is
+    ///     not established is left alone. Returns once the connection is aborted: the TCP object has sent the reset if its
+    ///     socket was still open (not if the connection broke a moment before and the loss is not detected yet, not
+    ///     through a decorator without Abort()). Like those methods it may wait up to 5 s for the old connection's loop,
+    ///     so call it from the thread pool.
+    /// </summary>
+    /// <param name="closePort">false replaces the connection with a new one that connects again right away; true closes
+    /// the port as well.</param>
+    /// <param name="cancellation">Ends the wait for the connection lock with an OperationCanceledException, without any
+    /// change; once the lock is held, the drop is not cancelled any more.</param>
+    /// <param name="portChanges">For <see cref="ReopenPortAfterDrop"/>: the port's change count after closing it.</param>
+    /// <returns>false, without any change, if no connection is established: <see cref="ConnectionStatus"/> is not
+    /// Connected, or the connection has already reported its end and its restart is still queued.</returns>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellation"/> was cancelled before the lock was
+    /// held.</exception>
+    internal bool TryDropConnection(bool closePort, CancellationToken cancellation, out int portChanges)
+    {
+        connectionStatusSemaphore.Wait(cancellation);
+        try
+        {
+            cancellation.ThrowIfCancellationRequested();
+            // ConnectionStatus stays Connected after the remote side has closed or reset the connection until the queued
+            // restart runs. Aborting it then would send no reset and replace the connection the restart replaces again.
+            if (ConnectionStatus != ConnectionStatus.Connected ||
+                Volatile.Read(ref lostConnectionNumber) >= connectionNumber)
+            {
+                portChanges = this.portChanges;
+                return false;
+            }
+
+            if (closePort)
+                ClosePortLocked(abort: true);
+            else
+                RestartConnectionLocked(abort: true, afterDispose: null);
+            portChanges = this.portChanges;
+            return true;
+        }
+        finally
+        {
+            connectionStatusSemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    ///     Opens the port again that <see cref="TryDropConnection"/> closed, unless somebody opened or closed it in the
+    ///     meantime (<see cref="OpenPort"/>, <see cref="ClosePort()"/>) or this handler is disposed.
+    /// </summary>
+    /// <param name="portChanges">What <see cref="TryDropConnection"/> returned.</param>
+    /// <returns>true if it opened the port.</returns>
+    internal bool ReopenPortAfterDrop(int portChanges)
+    {
+        connectionStatusSemaphore.Wait();
+        try
+        {
+            if (disposed || this.portChanges != portChanges) return false;
+            OpenPortLocked();
+            return true;
+        }
+        finally
+        {
+            connectionStatusSemaphore.Release();
+        }
+    }
+
     /// <summary>
     ///     Sends a data message and, if it was written, publishes it on <see cref="OnDataMessageOut"/>.
     /// </summary>

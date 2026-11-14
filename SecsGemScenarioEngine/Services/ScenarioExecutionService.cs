@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Globalization;
 using Logging.Enums;
 using Logging.Interfaces;
 using Microsoft.Extensions.Logging;
@@ -19,18 +21,27 @@ public class ScenarioExecutionService : IScenarioExecutionService
     private readonly ISecsGemLibraryManager libraryManager;
     private readonly ILogger<ScenarioExecutionService> logger;
     private readonly ScenarioReplyGuard replyGuard;
+    private readonly CommunicationHandler? communicationHandler;
+    private readonly ControlMessageHandling? controlMessageHandling;
     private CancellationTokenSource? cts;
 
+    /// <param name="communicationHandler">For <see cref="NodeType.DropConnection"/>; without it those nodes fail.</param>
+    /// <param name="controlMessageHandling">For <see cref="NodeType.WaitForCommunication"/> (HSMS state); without it
+    /// those nodes fail.</param>
     public ScenarioExecutionService(
         DataMessageHandler dataMessageHandler,
         ISecsGemLibraryManager libraryManager,
         ILogger<ScenarioExecutionService> logger,
-        ScenarioReplyGuard replyGuard)
+        ScenarioReplyGuard replyGuard,
+        CommunicationHandler? communicationHandler = null,
+        ControlMessageHandling? controlMessageHandling = null)
     {
         this.dataMessageHandler = dataMessageHandler;
         this.libraryManager = libraryManager;
         this.logger = logger;
         this.replyGuard = replyGuard;
+        this.communicationHandler = communicationHandler;
+        this.controlMessageHandling = controlMessageHandling;
     }
 
     public void Cancel()
@@ -282,6 +293,12 @@ public class ScenarioExecutionService : IScenarioExecutionService
             case NodeType.And:
                 return new ScenarioExecutionResult { Success = true }; // join logic handled in ExecuteAsync
 
+            case NodeType.DropConnection:
+                return await ExecuteDropConnectionAsync(node, runContext, token);
+
+            case NodeType.WaitForCommunication:
+                return await ExecuteWaitForCommunicationAsync(node, runContext, token);
+
             default:
                 return new ScenarioExecutionResult
                 {
@@ -356,6 +373,98 @@ public class ScenarioExecutionService : IScenarioExecutionService
 
         return new ScenarioExecutionResult { Success = true };
     }
+
+    private async Task<ScenarioExecutionResult> ExecuteDropConnectionAsync(ScenarioNode node, ScenarioRunContext runContext, CancellationToken token)
+    {
+        if (communicationHandler is not { } communication)
+            return Failure("DropConnection needs the CommunicationHandler, which the ScenarioExecutionService did not get");
+        if (!TryParseMilliseconds(node.TransactionName, out var downtimeMs))
+            return Failure($"DropConnection: '{node.TransactionName}' is not a downtime in ms (a whole number ≥ 0)");
+
+        // On the thread pool: aborting may wait up to 5 s for the connection's loop, which must not block a UI thread.
+        // The token also covers the wait for the connection lock: a run stopped meanwhile drops nothing.
+        var closePort = downtimeMs > 0;
+        var (dropped, portChanges) = await Task.Run(() =>
+            (communication.TryDropConnection(closePort, token, out var changes), changes), token);
+        if (!dropped)
+            return Failure("DropConnection: no connection established");
+
+        if (!closePort)
+        {
+            logger.LogInformation("Connection dropped (TCP reset), connecting again");
+            return new ScenarioExecutionResult { Success = true, CompletedSteps = 1 };
+        }
+
+        // Everything after the drop inside the try: the port must not stay closed because a log or progress call threw.
+        try
+        {
+            logger.LogInformation("Connection dropped (TCP reset), port closed for {DowntimeMs} ms", downtimeMs);
+            runContext.Progress?.Report(new ScenarioNodeProgress(node.Id, ScenarioNodeRunState.Waiting,
+                $"port closed, opens again in {downtimeMs} ms"));
+            await Task.Delay(downtimeMs, token);
+        }
+        finally
+        {
+            // At once when the run is cancelled or times out during the downtime.
+            if (await Task.Run(() => communication.ReopenPortAfterDrop(portChanges)))
+                logger.LogInformation("Port opened again after the dropped connection");
+            else
+                logger.LogInformation("Port left as it is: it was opened or closed during the downtime");
+        }
+
+        return new ScenarioExecutionResult { Success = true, CompletedSteps = 1 };
+    }
+
+    private async Task<ScenarioExecutionResult> ExecuteWaitForCommunicationAsync(ScenarioNode node, ScenarioRunContext runContext, CancellationToken token)
+    {
+        if (controlMessageHandling is not { } control)
+            return Failure("WaitForCommunication needs the ControlMessageHandling, which the ScenarioExecutionService did not get");
+        if (!TryParseMilliseconds(node.TransactionName, out var timeoutMs))
+            return Failure($"WaitForCommunication: '{node.TransactionName}' is not a timeout in ms (a whole number ≥ 0)");
+
+        bool Established() =>
+            control.HSMSStatus == HSMSStatus.Selected && dataMessageHandler.CommunicationsEstablished;
+
+        // Released on every change of either state; the loop checks again after each. Never disposed: a handler may
+        // still run on another thread after it is removed.
+        var changed = new SemaphoreSlim(0);
+        void OnChanged(object? sender, PropertyChangedEventArgs e) => changed.Release();
+        control.PropertyChanged += OnChanged;
+        dataMessageHandler.PropertyChanged += OnChanged;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        if (timeoutMs > 0)
+            timeout.CancelAfter(timeoutMs);
+        try
+        {
+            if (!Established())
+            {
+                logger.LogInformation("Waiting for communication...");
+                runContext.Progress?.Report(new ScenarioNodeProgress(node.Id, ScenarioNodeRunState.Waiting,
+                    "waiting for communication"));
+            }
+
+            while (!Established())
+                await changed.WaitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            return Failure($"Communication not established within {timeoutMs} ms");
+        }
+        finally
+        {
+            control.PropertyChanged -= OnChanged;
+            dataMessageHandler.PropertyChanged -= OnChanged;
+        }
+
+        logger.LogInformation("Communication established");
+        return new ScenarioExecutionResult { Success = true, CompletedSteps = 1 };
+    }
+
+    /// <summary>A node parameter in ms: a whole number ≥ 0, digits only (surrounding spaces are ignored).</summary>
+    private static bool TryParseMilliseconds(string? text, out int milliseconds) =>
+        int.TryParse(text?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out milliseconds);
+
+    private static ScenarioExecutionResult Failure(string message) => new() { Success = false, ErrorMessage = message };
 
     private async Task<ScenarioExecutionResult> ExecuteReceiveAsync(ScenarioNode node, ScenarioRunContext runContext, CancellationToken token)
     {
