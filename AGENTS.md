@@ -63,6 +63,10 @@ Two mechanisms must be kept in sync:
 
 `restartPending` exists because `NetworkSettings.CopyFrom()` sets three properties synchronously, firing three `PropertyChanged` events in quick succession, and because a lost connection often brings `OnDisconnected` and failed sends together. Without the flag, several `RestartConnection()` calls would be queued and each would replace the connection again. The flag is set before the task starts and cleared under the lock right after the old connection has been disposed, before the new one is built: requests up to that point are covered by this restart, later ones queue a new restart. That is right for `OnDisconnected` of the new connection and for settings changes (the new connection is built after the reset). A failed send that concerns the old connection but reaches the flag only after the reset restarts the new one as well, because restart requests are not yet bound to their connection (GitLab ticket 32). Clearing it only after `RestartConnection()` returned dropped an `OnDisconnected` of the new connection, and since `TCPIPClientBase` no longer reconnects by itself (GitLab ticket 5), nothing would reconnect.
 
+## Aborting a Connection
+
+`ITCPIPBase.Abort()` ends the connection with a TCP reset (RST) instead of the orderly close (FIN) of `Dispose()`, then disposes the object (GitLab ticket 53). `TCPIPClientBase` and `TCPIPServerBase` call `Socket.Close(0)` before the `TcpClient` is disposed: `TcpClient.Close()`/`Dispose()` always shuts the socket down first (via its `NetworkStream`), also with `LingerState` set. The default implementation is `Dispose()`, so a decorating `ITCPIPBase` must forward `Abort()` or it closes in order. `CommunicationHandler.ClosePort(bool abort)` and `RestartConnection(bool abort)` are overloads next to the parameterless methods (not optional parameters: method groups and builds against older packages).
+
 ## Send Failures
 
 `SendAndLogMessage` and `SendStateMessage` report every write error as `MessageStatus.Failure` instead of throwing, and publish only written messages on `OnDataMessageOut`/`OnControlMessageOut` (GitLab ticket 14):

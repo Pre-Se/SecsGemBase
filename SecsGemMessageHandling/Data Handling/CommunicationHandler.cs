@@ -198,12 +198,24 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
             connectionStatusSemaphore.Release();
         }
     }
-    public void ClosePort()
+    /// <summary>
+    ///     Closes the connection in order and the port.
+    /// </summary>
+    public void ClosePort() => ClosePort(abort: false);
+
+    /// <summary>
+    ///     Closes the connection and the port.
+    /// </summary>
+    /// <param name="abort">true ends an established connection with a TCP reset (RST) instead of closing it in order,
+    /// as after a hard connection loss (see <see cref="ITCPIPBase.Abort"/>). The reset needs an ITCPIPBase that implements
+    /// Abort(): TCPIPClientBase and TCPIPServerBase do, a decorator from the connection factory must forward it, or it
+    /// closes in order.</param>
+    public void ClosePort(bool abort)
     {
         connectionStatusSemaphore.Wait();
         try
         {
-            DisposeConnection();
+            DisposeConnection(abort);
             BuildConnectionBase();
             // Status last, like RestartConnection: OnDisconnect then follows the OnConnect handlers that the old
             // connection's loop may still be running (Dispose waited for that loop).
@@ -215,18 +227,31 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
         }
     }
 
-    public void RestartConnection() => RestartConnection(afterDispose: null);
+    /// <summary>
+    ///     Closes the connection in order and replaces it with a new one, which connects again if the port is open.
+    /// </summary>
+    public void RestartConnection() => RestartConnection(abort: false, afterDispose: null);
 
+    /// <summary>
+    ///     Closes the connection and replaces it with a new one, which connects again if the port is open.
+    /// </summary>
+    /// <param name="abort">true ends an established connection with a TCP reset (RST) instead of closing it in order,
+    /// as after a hard connection loss (see <see cref="ITCPIPBase.Abort"/>). The reset needs an ITCPIPBase that implements
+    /// Abort(): TCPIPClientBase and TCPIPServerBase do, a decorator from the connection factory must forward it, or it
+    /// closes in order.</param>
+    public void RestartConnection(bool abort) => RestartConnection(abort, afterDispose: null);
+
+    /// <param name="abort">See <see cref="RestartConnection(bool)"/>.</param>
     /// <param name="afterDispose">Runs under the lock once the old connection is disposed and unsubscribed, before
     /// the new one is built.</param>
-    private void RestartConnection(Action? afterDispose)
+    private void RestartConnection(bool abort, Action? afterDispose)
     {
         connectionStatusSemaphore.Wait();
         try
         {
             if (ConnectionStatus is ConnectionStatus.Connected)
                 logger.LogInformation("Communication will be restarted");
-            DisposeConnection();
+            DisposeConnection(abort);
             afterDispose?.Invoke();
             BuildConnectionBase();
             if (ConnectionOn)
@@ -378,12 +403,22 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
     /// <summary>
     ///     Stops and closes all communication with the remote device
     /// </summary>
-    private void DisposeConnection()
+    private void DisposeConnection(bool abort = false)
     {
         Volatile.Read(ref connectionDisposing).Cancel();
         TCPIPBase.OnConnect -= connectionOnConnect;
         TCPIPBase.OnDisconnected -= connectionOnDisconnected;
-        TCPIPBase.Dispose();
+        if (abort)
+        {
+            // The TCP object logs the reset itself if it sends one (not without a connection, not a decorator that
+            // does not implement Abort()).
+            logger.LogInformation("Aborting the connection");
+            TCPIPBase.Abort();
+        }
+        else
+        {
+            TCPIPBase.Dispose();
+        }
     }
     /// <summary>
     ///     Sends and logs a <see cref="SecsGemDataMessage" /> to the remote device
@@ -533,7 +568,7 @@ public partial class CommunicationHandler : ObservableObject, IDisposable
                 // Cleared under the lock, right after the old connection is gone and before the new one exists.
                 // Clearing only after RestartConnection() returned dropped an OnDisconnected of the new connection
                 // that came in between, and nothing reconnected (TCPIPClientBase no longer reconnects by itself).
-                RestartConnection(afterDispose: () =>
+                RestartConnection(abort: false, afterDispose: () =>
                 {
                     Interlocked.Exchange(ref restartPending, 0);
                     cleared = true;
