@@ -9,9 +9,10 @@ dotnet restore SecsGemBase.sln
 dotnet build SecsGemBase.sln
 dotnet build SecsGemBase.sln --configuration Release
 dotnet pack SecsGemBase.sln -c Release
+dotnet test SecsGemBase.sln -c Release
 ```
 
-There are no tests, no linter, and no typecheck in this repo. A successful `dotnet build` is the only verification step.
+xUnit test projects: `SecsGemBaseItems.Tests`, `TCPIPBaseLibrary.Tests`, `SecsGemMessageHandling.Tests` and `SecsGemScenarioEngine.Tests` (`IsPackable=false`: `dotnet pack` packs the whole solution). Many tests use real loopback sockets. There is no linter.
 
 ## Shared Build Settings (Directory.Build.props)
 
@@ -58,7 +59,7 @@ The ReSharper settings register these as single-word abbreviations: `HSMS`, `TCP
 
 Two mechanisms must be kept in sync:
 
-- `connectionStatusSemaphore` (SemaphoreSlim(1,1)) serializes `OpenPort`/`ClosePort`/`ClosePortIfCurrent`/`RestartConnection` and the status update in `OnConnected`; `Dispose()` does not take it
+- `connectionStatusSemaphore` (SemaphoreSlim(1,1)) serializes `OpenPort`/`ClosePort`/`ClosePortIfCurrent`/`RestartConnection`/`TryDropConnection`/`ReopenPortAfterDrop` and the status update in `OnConnected`; `Dispose()` does not take it. The `…Locked` methods expect it to be held.
 - `restartPending` (int, Interlocked) coalesces queued restarts (`PropertyChanged` of the network settings, `OnDisconnected`, failed sends) into one background task
 
 `restartPending` exists because `NetworkSettings.CopyFrom()` sets three properties synchronously, firing three `PropertyChanged` events in quick succession, and because a lost connection often brings `OnDisconnected` and failed sends together. Without the flag, several `RestartConnection()` calls would be queued and each would replace the connection again. The flag is set before the task starts and cleared under the lock right after the old connection has been disposed, before the new one is built: requests up to that point are covered by this restart, later ones queue a new restart. That is right for `OnDisconnected` of the new connection and for settings changes (the new connection is built after the reset). A failed send that concerns the old connection but reaches the flag only after the reset restarts the new one as well, because restart requests are not yet bound to their connection (GitLab ticket 32). Clearing it only after `RestartConnection()` returned dropped an `OnDisconnected` of the new connection, and since `TCPIPClientBase` no longer reconnects by itself (GitLab ticket 5), nothing would reconnect.
@@ -66,6 +67,14 @@ Two mechanisms must be kept in sync:
 ## Aborting a Connection
 
 `ITCPIPBase.Abort()` ends the connection with a TCP reset (RST) instead of the orderly close (FIN) of `Dispose()`, then disposes the object (GitLab ticket 53). `TCPIPClientBase` and `TCPIPServerBase` call `Socket.Close(0)` before the `TcpClient` is disposed: `TcpClient.Close()`/`Dispose()` always shuts the socket down first (via its `NetworkStream`), also with `LingerState` set. The default implementation is `Dispose()`, so a decorating `ITCPIPBase` must forward `Abort()` or it closes in order. `CommunicationHandler.ClosePort(bool abort)` and `RestartConnection(bool abort)` are overloads next to the parameterless methods (not optional parameters: method groups and builds against older packages).
+
+## Scenario Nodes for Connection Loss
+
+`NodeType.DropConnection` and `NodeType.WaitForCommunication` (GitLab ticket 54) take their parameter in ms from `TransactionName`, like the Wait node, but a value that is not a whole number ≥ 0 fails the node. They need the optional constructor parameters `CommunicationHandler` and `ControlMessageHandling` of `ScenarioExecutionService`.
+
+- `DropConnection` calls the internal `CommunicationHandler.TryDropConnection` (visible to `SecsGemScenarioEngine` via `InternalsVisibleTo`: release both packages together). It checks for an established connection (Connected, and its loss not yet reported) and aborts it with a reset under the connection lock, either restarting it (downtime 0) or closing the port. After the downtime, or at once when the run is cancelled or times out, `ReopenPortAfterDrop` opens the port again, unless `ConnectionOn` was set in between (`portChanges` counts every set): then somebody opened or closed the port by hand, and a second `OpenPort` would start a second connection loop.
+- Both calls go through `Task.Run`: `Dispose` of the old connection may wait up to 5 s for its loop, and EvenBetterFastSim starts runs on the UI thread, where the engine's continuations then run.
+- `WaitForCommunication` waits for `HSMSStatus.Selected` and `DataMessageHandler.CommunicationsEstablished` (a deselect keeps the flag). `DropConnection` raises `OnDisconnect` before it returns, which clears the flag, so a following `WaitForCommunication` waits for the new connection. The flag is not bound to a connection, though: a handshake of the old connection that is still being handled can set it again (GitLab ticket 66).
 
 ## Send Failures
 

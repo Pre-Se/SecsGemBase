@@ -110,7 +110,9 @@ public class ReceiveAfterReconnectTests
             gate.Set();
         }
 
-        await WaitUntilAsync(() => factory.Created.Count == 2, () => $"created={factory.Created.Count}");
+        // Until the restart has subscribed to the new connection, a frame delivered there would be lost.
+        await WaitUntilAsync(() => factory.Created.Count == 2 && factory.Created[1].Subscribed,
+            () => $"created={factory.Created.Count}");
         var next = stack.Data.WaitForReceivedMessage(IsEventReport, Long);
         factory.Created[1].Deliver(stack.Frame(2));
         Assert.Equal(2u, (await next)?.HeaderData.SystemBytes);
@@ -265,6 +267,12 @@ public class ReceiveAfterReconnectTests
         }
 
         public void RaiseOnDisconnected() => onDisconnected?.Invoke(this, EventArgs.Empty);
+
+        /// <summary>
+        /// CommunicationHandler.BuildConnectionBase subscribes OnDisconnected last, after OnDataReceived: from then on a
+        /// delivered frame is parsed.
+        /// </summary>
+        public bool Subscribed => Volatile.Read(ref onDisconnected) is not null;
         public bool DisposeStarted => Volatile.Read(ref disposeStarted);
         private bool disposeStarted;
         public IEventBus<ReadOnlyMemory<byte>> OnDataReceived { get; } = EventBuses.CreateTransient<ReadOnlyMemory<byte>>();
