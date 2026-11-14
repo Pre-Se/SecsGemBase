@@ -53,17 +53,33 @@ public class OnConnectSendFailureTests
     {
         var port = GetFreePort();
         var server = new TCPIPServerBase(Settings(port, ConnectionMode.Passive), NullLogger<TCPIPServerBase>.Instance, EventBuses);
+        var accepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Not disposed: a handler that starts only after the test has failed must not wait on a disposed event.
+        var resetSent = new ManualResetEventSlim();
         var sendFailed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        server.OnConnect += (_, _) => SendAfterRemoteReset(server, sendFailed);
+        server.OnConnect += (_, _) =>
+        {
+            accepted.TrySetResult();
+            resetSent.Wait(TimeSpan.FromSeconds(10));
+            SendAfterRemoteReset(server, sendFailed);
+        };
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         server.OnDisconnected += (_, _) => disconnected.TrySetResult();
 
         var loop = Task.Run(server.Connect);
-        using (var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp))
+        try
         {
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             await ConnectWithRetryAsync(socket, port);
+            // Reset only once the server has accepted: whether a connection that is reset while it waits in the accept
+            // queue is accepted at all depends on the system (this test timed out on the GitHub runner, Ubuntu 26.04).
+            await accepted.Task.WaitAsync(TimeSpan.FromSeconds(10));
             // Close(0) without a prior Shutdown sends RST.
             socket.Close(0);
+        }
+        finally
+        {
+            resetSent.Set();
         }
 
         await sendFailed.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -149,9 +165,8 @@ public class OnConnectSendFailureTests
 
     private static int GetFreePort()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
+        // A port outside the ephemeral range, see TestPorts (GitLab secsgem/secsgembase#61).
+        return TestSupport.TestPorts.Next();
     }
 
     // Connect() starts the listener asynchronously, so the first attempts may be refused.

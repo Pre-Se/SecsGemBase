@@ -12,7 +12,7 @@ dotnet pack SecsGemBase.sln -c Release
 dotnet test SecsGemBase.sln -c Release
 ```
 
-xUnit test projects: `SecsGemBaseItems.Tests`, `TCPIPBaseLibrary.Tests`, `SecsGemMessageHandling.Tests` and `SecsGemScenarioEngine.Tests` (`IsPackable=false`: `dotnet pack` packs the whole solution). Many tests use real loopback sockets. There is no linter.
+xUnit test projects: `SecsGemBaseItems.Tests`, `TCPIPBaseLibrary.Tests`, `SecsGemMessageHandling.Tests` and `SecsGemScenarioEngine.Tests` (`IsPackable=false`: `dotnet pack` packs the whole solution). Many tests use real loopback sockets. A test that needs a port before anything listens on it takes one from `TestSupport/TestPorts.cs` (linked into each test project): below the ephemeral range, so outgoing connections and bind(0) never take it, with a slice of its own per test project, because `dotnet test` runs the projects as parallel processes (GitLab ticket 61). There is no linter.
 
 ## Shared Build Settings (Directory.Build.props)
 

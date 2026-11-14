@@ -36,6 +36,16 @@ jobs:
       - name: SDK version
         run: dotnet --version  # global.json: an SDK 10.0, never the runner's newer preinstalled SDK
 
+      # The socket tests take ports 20000-31999 (TestSupport/TestPorts.cs), which must lie outside these ranges.
+      - name: Ephemeral port ranges (Linux)
+        if: runner.os == 'Linux'
+        run: sysctl net.ipv4.ip_local_port_range
+      - name: Ephemeral and excluded port ranges (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          netsh int ipv4 show dynamicport tcp
+          netsh int ipv4 show excludedportrange protocol=tcp
+
       - name: Restore
         run: dotnet restore SecsGemBase.sln
 
