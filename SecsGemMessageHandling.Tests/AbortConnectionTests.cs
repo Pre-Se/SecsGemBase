@@ -117,9 +117,8 @@ public class AbortConnectionTests
 
     private static int GetFreePort()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
+        // A port outside the ephemeral range, see TestPorts (GitLab secsgem/secsgembase#61).
+        return TestSupport.TestPorts.Next();
     }
 
     private static async Task<Socket> ConnectWithRetryAsync(int port)

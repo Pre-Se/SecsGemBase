@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\TestSupport\TestPorts.cs" Link="TestPorts.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\SecsGemScenarioEngine\SecsGemScenarioEngine.csproj" />
   </ItemGroup>
 

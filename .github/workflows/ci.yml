@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [ development, main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    # Linux like publish.yml; Windows because the TCP tests (resets, rebinding the passive port) behave differently there.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0              # Nerdbank.GitVersioning needs the full history
+          persist-credentials: false  # no Git token needed after the checkout
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: SDK version
+        run: dotnet --version  # global.json: an SDK 10.0, never the runner's newer preinstalled SDK
+
+      # The socket tests take ports 20000-31999 (TestSupport/TestPorts.cs), which must lie outside these ranges.
+      - name: Ephemeral port ranges (Linux)
+        if: runner.os == 'Linux'
+        run: sysctl net.ipv4.ip_local_port_range
+      - name: Ephemeral and excluded port ranges (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          netsh int ipv4 show dynamicport tcp
+          netsh int ipv4 show excludedportrange protocol=tcp
+
+      - name: Restore
+        run: dotnet restore SecsGemBase.sln
+
+      - name: Build
+        run: dotnet build SecsGemBase.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test SecsGemBase.sln -c Release --no-build

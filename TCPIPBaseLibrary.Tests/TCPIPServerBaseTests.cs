@@ -90,9 +90,8 @@ public class TCPIPServerBaseTests
 
     private static int GetFreePort()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
+        // A port outside the ephemeral range, see TestPorts (GitLab secsgem/secsgembase#61).
+        return TestSupport.TestPorts.Next();
     }
 
     // Connect() starts the listener asynchronously, so the first attempts may be refused. With 'accepted', retrying

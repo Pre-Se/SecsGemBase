@@ -20,6 +20,9 @@ public class SendDataDisposeTests
 {
     private static readonly EventBusFactory EventBuses = new(NullLoggerFactory.Instance);
 
+    /// <summary>Set before connecting: the peer advertises a small window, so the connection under test can send little.</summary>
+    private const int PeerReceiveBuffer = 4096;
+
     [Theory]
     [InlineData(ConnectionMode.Active)]
     [InlineData(ConnectionMode.Passive)]
@@ -42,10 +45,17 @@ public class SendDataDisposeTests
         var (connection, peer, loop) = await ConnectedAsync(mode);
         using var _ = peer;
 
-        // The peer never reads, so a write far larger than the socket buffers stays pending.
-        var write = connection.SendData(new byte[64 * 1024 * 1024]);
-        await Task.Delay(200);
-        Assert.False(write.IsCompleted, $"The write did not block: {write.Status}");
+        // The peer never reads and has a small receive buffer, so the socket buffers fill up and a write stays pending.
+        // Write until one does: Windows buffers far more than Linux (a single 64 MB write completed there).
+        var chunk = new byte[16 * 1024 * 1024];
+        Task<bool> write;
+        for (var chunks = 1; ; chunks++)
+        {
+            write = connection.SendData(chunk);
+            if (await Task.WhenAny(write, Task.Delay(200)) != write) break;
+            Assert.True(await write);
+            Assert.True(chunks < 16, "256 MB was written to a peer that does not read without a write blocking");
+        }
 
         connection.Dispose();
 
@@ -60,6 +70,7 @@ public class SendDataDisposeTests
         if (mode == ConnectionMode.Active)
         {
             using var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Server.ReceiveBufferSize = PeerReceiveBuffer; // inherited by the accepted socket
             listener.Start();
             var client = new TCPIPClientBase(Settings(((IPEndPoint)listener.LocalEndpoint).Port, mode),
                 NullLogger<TCPIPClientBase>.Instance, EventBuses) { ConnectSeparationTimeout = 50 };
@@ -74,7 +85,10 @@ public class SendDataDisposeTests
         var server = new TCPIPServerBase(Settings(port, mode), NullLogger<TCPIPServerBase>.Instance, EventBuses);
         server.OnConnect += (_, _) => connected.TrySetResult();
         var serverLoop = Task.Run(server.Connect);
-        var peer = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        var peer = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
+        {
+            ReceiveBufferSize = PeerReceiveBuffer
+        };
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (true)
         {
@@ -103,8 +117,7 @@ public class SendDataDisposeTests
 
     private static int GetFreePort()
     {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
+        // A port outside the ephemeral range, see TestPorts (GitLab secsgem/secsgembase#61).
+        return TestSupport.TestPorts.Next();
     }
 }
