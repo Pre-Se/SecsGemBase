@@ -241,10 +241,17 @@ internal sealed class ProgressLog(Action<ScenarioNodeProgress>? onReport = null)
 internal sealed class Log
 {
     private readonly List<string> messages = [];
+    private readonly List<LogLevel> levels = [];
 
     public IReadOnlyList<string> Messages
     {
         get { lock (messages) return messages.ToList(); }
+    }
+
+    /// <summary>The messages with their levels, in the order they were logged.</summary>
+    public IReadOnlyList<(LogLevel Level, string Message)> Entries
+    {
+        get { lock (messages) return levels.Zip(messages).ToList(); }
     }
 
     public ILogger<T> For<T>() => new Logger<T>(this);
@@ -257,7 +264,11 @@ internal sealed class Log
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            lock (log.messages) log.messages.Add(formatter(state, exception));
+            lock (log.messages)
+            {
+                log.levels.Add(logLevel);
+                log.messages.Add(formatter(state, exception));
+            }
         }
     }
 }

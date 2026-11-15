@@ -364,8 +364,18 @@ public class ScenarioExecutionService : IScenarioExecutionService
 
     private async Task<ScenarioExecutionResult> ExecuteWaitAsync(ScenarioNode node, CancellationToken token)
     {
-        // Wait node: TransactionName stores the delay in milliseconds
-        if (int.TryParse(node.TransactionName, out var delayMs) && delayMs > 0)
+        // Wait node: TransactionName stores the delay in milliseconds. Read with the invariant culture, so that a
+        // scenario file means the same on every computer (the current culture changes the sign characters).
+        if (!int.TryParse(node.TransactionName, NumberStyles.Integer, CultureInfo.InvariantCulture, out var delayMs) ||
+            delayMs < 0)
+        {
+            // The node succeeds without waiting, as it always did, so existing scenarios keep running. Until GitLab
+            // secsgem/evencoolerfastsim#18 it did so silently: "20 s" or "12,6" looked like a wait that took no time.
+            logger.LogWarning(
+                "Wait node {NodeId}: '{Value}' is not a time in ms (a whole number from 0 to 2147483647), the node does not wait",
+                node.Id, node.TransactionName ?? string.Empty);
+        }
+        else if (delayMs > 0)
         {
             logger.LogInformation("Waiting {DelayMs}ms...", delayMs);
             await Task.Delay(delayMs, token);

@@ -8,6 +8,17 @@ public enum NodeType
     Send,
     End,
     Condition,
+
+    /// <summary>
+    /// Waits the time in <see cref="ScenarioNode.TransactionName"/>, in ms, then succeeds. The time is read with
+    /// <c>int.TryParse</c> (<c>NumberStyles.Integer</c>, invariant culture): a whole number from 0 to 2147483647 in
+    /// the digits 0-9; white space around it and a leading sign are accepted. 0 does not wait. A text that cannot be
+    /// read this way and a negative number do not wait either; the node still succeeds and logs a warning.
+    /// </summary>
+    /// <remarks>
+    /// Unlike <see cref="DropConnection"/> and <see cref="WaitForCommunication"/>, which take no sign and fail on a
+    /// parameter they cannot read: scenarios made before the warning existed keep running as they did.
+    /// </remarks>
     Wait,
     Receive,
 
