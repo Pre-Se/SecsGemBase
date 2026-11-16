@@ -34,7 +34,10 @@ jobs:
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         id: login
         with:
-          user: ${{ secrets.NUGET_USER }}
+          # nuget.org profile name of the account that created the trusted publishing policy
+          # (an individual account, never an organization). nuget.org records every push under
+          # this account, whoever starts the run on GitHub. The name is public, so not a secret.
+          user: pre-se
 
       # Push the package
       - name: NuGet push
